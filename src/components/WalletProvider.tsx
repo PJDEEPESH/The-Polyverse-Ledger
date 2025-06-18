@@ -1,34 +1,36 @@
-import '@rainbow-me/rainbowkit/styles.css';
-import { getDefaultWallets, RainbowKitProvider } from '@rainbow-me/rainbowkit';
-import { configureChains, createConfig, WagmiConfig } from 'wagmi';
-import { mainnet, polygon, optimism, arbitrum } from 'wagmi/chains';
-import { publicProvider } from 'wagmi/providers/public';
-import { ReactNode } from 'react';
+import "@rainbow-me/rainbowkit/styles.css";
+import { getDefaultWallets, RainbowKitProvider } from "@rainbow-me/rainbowkit";
+import { WagmiProvider, createConfig, http } from "wagmi";
+import { mainnet, polygon, optimism, arbitrum } from "wagmi/chains";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const { chains, publicClient } = configureChains(
-  [mainnet, polygon, optimism, arbitrum],
-  [publicProvider()]
-);
+const chains = [mainnet, polygon, optimism, arbitrum] as const;
 
 const { connectors } = getDefaultWallets({
-  appName: 'MythosNet',
-  projectId: 'YOUR_PROJECT_ID', // Replace with actual WC project ID or leave empty
-  chains,
+  appName: "MythosNet",
+  projectId: "YOUR_PROJECT_ID", // Replace with actual WalletConnect ID
 });
 
-const wagmiConfig = createConfig({
-  autoConnect: true,
+const config = createConfig({
   connectors,
-  publicClient,
+  chains,
+  transports: {
+    [mainnet.id]: http(),
+    [polygon.id]: http(),
+    [optimism.id]: http(),
+    [arbitrum.id]: http(),
+  },
+  ssr: true,
 });
 
-export function WalletProvider({ children }: { children: ReactNode }) {
+const queryClient = new QueryClient();
+
+export function WalletProvider({ children }: { children: React.ReactNode }) {
   return (
-    <WagmiConfig config={wagmiConfig}>
-      <RainbowKitProvider chains={chains}>
-        {children}
-      </RainbowKitProvider>
-    </WagmiConfig>
+    <WagmiProvider config={config}>
+      <QueryClientProvider client={queryClient}>
+        <RainbowKitProvider>{children}</RainbowKitProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
   );
 }
-

@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { InvoiceService } from '../services/invoice';
+import { InvoiceService } from '../services/invoice.js';
 import { z } from 'zod';
 
 const createInvoiceSchema = z.object({

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
-import { BlockchainService } from '../services/blockchain';
+import { BlockchainService } from '../services/blockchain.js';
 import { z } from 'zod';
-
+import User from '../models/User.js';
 const registerBlockchainSchema = z.object({
   name: z.string().min(1)
 });

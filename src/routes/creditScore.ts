@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { CreditScoreService } from '../services/creditScore';
+import { CreditScoreService } from '../services/creditScore.js';
 
 export async function creditScoreRoutes(fastify: FastifyInstance) {
   fastify.get('/:userId', {

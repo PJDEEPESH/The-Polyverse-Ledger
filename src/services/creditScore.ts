@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { calculateRiskScore } from '../utils/ml';
+import { calculateRiskScore } from '../utils/ml.js';
 
 const prisma = new PrismaClient();
 

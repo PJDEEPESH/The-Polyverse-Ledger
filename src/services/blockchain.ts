@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { create } from 'ipfs-http-client';
 import { ethers } from 'ethers';
-import { generateUBID, generateBNSName } from '../utils/ubid';
+import { generateUBID, generateBNSName } from '../utils/ubid.js';
 
 const prisma = new PrismaClient();
 const ipfs = create({ url: process.env.IPFS_URL || 'http://localhost:5001' });

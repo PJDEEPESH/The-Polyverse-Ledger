@@ -44,7 +44,7 @@ export class CreditScoreService {
       : 0;
 
     // Calculate risk score using ML (25%)
-    const riskScore = await calculateRiskScore(user);
+    const riskScore = await calculateRiskScore(user.id);
     const riskScorePoints = (1 - riskScore) * 250; // Invert risk score as lower risk = higher points
 
     // Calculate final score (300-900 range)

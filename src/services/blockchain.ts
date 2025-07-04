@@ -14,7 +14,7 @@ export class BlockchainService {
   }) {
     const ubid = generateUBID(data.networkType, data.chainProtocol);
     const bnsName = generateBNSName(data.name);
-    const apiKey = ethers.randomBytes(32).toString('hex');
+    const apiKey = ethers.hexlify(ethers.randomBytes(32));
 
     // Store blockchain metadata in IPFS
     const ipfsData = {

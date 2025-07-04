@@ -5,7 +5,7 @@ export function generateUBID(networkType: string, chainProtocol: string): string
   // Generate a unique identifier for blockchain networks
   // Format: UBID-[NETWORK_TYPE]-[PROTOCOL]-[HASH]
   const timestamp = Date.now().toString();
-  const random = ethers.randomBytes(16).toString('hex');
+const random = ethers.randomBytes(16).toString();
   
   const hash = createHash('sha256')
     .update(timestamp + random)

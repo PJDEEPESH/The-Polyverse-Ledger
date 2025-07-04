@@ -1,9 +1,31 @@
 import type { User } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
-export async function calculateRiskScore(user: User): Promise<number> {
+const prisma = new PrismaClient();
+
+// Define extended User type with relations
+type UserWithRelations = User & {
+  transactions?: any[];
+  invoices?: any[];
+};
+
+export async function calculateRiskScore(userId: string): Promise<number> {
   // This is a simplified risk scoring model
   // In production, you would use a proper ML model
   
+  // Fetch user with related data
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      transactions: true,
+      invoices: true
+    }
+  });
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
   const transactionCount = user.transactions?.length || 0;
   const invoiceCount = user.invoices?.length || 0;
   

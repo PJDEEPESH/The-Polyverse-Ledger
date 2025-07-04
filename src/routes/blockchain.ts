@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { BlockchainService } from '../services/blockchain.js';
 import { z } from 'zod';
-import User from '../models/User.js';
+
 const registerBlockchainSchema = z.object({
   name: z.string().min(1)
 });
@@ -19,7 +19,11 @@ export async function blockchainRoutes(fastify: FastifyInstance) {
     }
   }, async (request, reply) => {
     const { name } = registerBlockchainSchema.parse(request.body);
-    const blockchain = await BlockchainService.register(name);
+    const blockchain = await BlockchainService.register({
+      name: name,
+      networkType: 'mainnet', // or appropriate value
+      chainProtocol: 'ethereum' // or appropriate value
+    });
     return reply.code(201).send(blockchain);
   });
 

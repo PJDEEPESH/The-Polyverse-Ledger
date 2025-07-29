@@ -1,9 +1,11 @@
+//src/utils/getCreditScoreContract.ts
 import { ethers } from "ethers";
 import CreditScoreABI from "../abi/CreditScore.json";
 
-// Replace this with your actual deployed CreditScore contract address
-const contractAddress = "0x2b51954D8428d10250709141A0BBDaf7d36B01BE";
+
+const contractAddress = "0x6cDFd1734cE9Fd0FB85c9Ac732EEA8C96d8C21c4";
 
 export const getCreditScoreContract = (signerOrProvider: any) => {
-  return new ethers.Contract(contractAddress, CreditScoreABI.abi, signerOrProvider);
+  const abi = CreditScoreABI.abi || CreditScoreABI;
+  return new ethers.Contract(contractAddress, abi, signerOrProvider);
 };

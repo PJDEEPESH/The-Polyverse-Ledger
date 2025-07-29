@@ -1,8 +1,9 @@
+//src/utils/getUserRegistryContract.ts
 import { ethers } from "ethers";
-import abi from "../abi/UserRegistry.json";
+import contractJson from "../abi/UserRegistry.json";
 
-const CONTRACT_ADDRESS = "0x167d2B79dde22bC30f53D36D2a06403848A445Ce";
+const CONTRACT_ADDRESS = "0xFE1DDeE0338F77a2410CC56A30A0Be62D0843Dbe";
 
 export const getUserRegistryContract = (signerOrProvider: ethers.Signer | ethers.Provider) => {
- return new ethers.Contract(CONTRACT_ADDRESS, abi as any, signerOrProvider);
+  return new ethers.Contract(CONTRACT_ADDRESS, contractJson.abi, signerOrProvider);
 };

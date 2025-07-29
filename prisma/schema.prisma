@@ -7,108 +7,219 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PAID
+  CANCELED
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
 model Blockchain {
   id            String   @id @default(uuid())
   name          String   @unique
-  ubid          String   @unique // Universal Blockchain Identifier
-  bnsName       String?  @unique // Blockchain Name System
+  ubid          String   @unique
+  bnsName       String?  @unique
   apiKey        String   @unique
-  networkType   String   // mainnet, testnet
-  chainProtocol String   // eth, sol, dot, etc
+  networkType   String
+  chainProtocol String
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  users         User[]
-  invoices      Invoice[]
-  identities    CrossChainIdentity[]
-  transactions  CrossChainTransaction[]
+  users        User[]
+  invoices     Invoice[]
+  identities   CrossChainIdentity[]
+  transactions CrossChainTransaction[]
+}
+
+model Plan {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  price      Int      @default(0)
+  queryLimit Int      @default(20)
+  txnLimit   Int?
+  userLimit  Int      @default(1)
+  features   String[] @default([])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  users         User[]         @relation("UserPlan")
+  organizations Organization[] @relation("OrgPlan")
+}
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  ownerId     String
+  planId      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  plan        Plan?    @relation("OrgPlan", fields: [planId], references: [id], onDelete: SetNull)
+  owner       User     @relation("OrgOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members     User[]   @relation("OrgMembers")
 }
 
 model User {
-  id            String   @id @default(uuid())
+  id            String     @id @default(uuid())
   blockchainId  String
   blockchain    Blockchain @relation(fields: [blockchainId], references: [id])
   walletAddress String
-  creditScore   Int      @default(500)
-  identityHash  String?  @unique // ZK proof of identity
-  kycStatus     String?  // pending, verified, rejected
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  creditScore   Int        @default(0)
+  metadataURI   String
+  identityHash  String?    @unique
+  kycStatus     KycStatus?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  invoiceCount  Int        @default(0)
+
+  planId String?
+  plan   Plan?   @relation("UserPlan", fields: [planId], references: [id], onDelete: SetNull)
+
+  orgId        String?
+  organization Organization? @relation("OrgMembers", fields: [orgId], references: [id], onDelete: SetNull)
+  ownedOrgs    Organization[] @relation("OrgOwner")
+
+  subscriptionId String?
+  trialStartDate DateTime?
+  trialUsed      Boolean   @default(false)
+
+  queryCount     Int          @default(0)
+  lastQueryReset DateTime?
 
   transactions  Transaction[]
   invoices      Invoice[]
   crossChainIds CrossChainIdentity[]
   crossChainTxs CrossChainTransaction[]
   creditHistory CreditScoreHistory[]
+  queryUsages   QueryUsage[]
 
   @@unique([blockchainId, walletAddress])
 }
 
 model CrossChainIdentity {
-  id            String   @id @default(uuid())
+  id            String     @id @default(uuid())
   userId        String
-  user          User     @relation(fields: [userId], references: [id])
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   blockchainId  String
   blockchain    Blockchain @relation(fields: [blockchainId], references: [id])
   walletAddress String
-  proofHash     String   // ZK proof of wallet ownership
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  proofHash     String
+  status        String     @default("approved")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  // ✅ Per-wallet stats (separate from User)
+  creditScore   Int        @default(0)
+  invoiceCount  Int        @default(0)
+
+  // ✅ Relations for CrossChain-specific records
+  invoices      Invoice[]  @relation("CrossChainIdentityToInvoice")
+  creditHistory CreditScoreHistory[] @relation("CrossChainIdentityCreditHistory")
 
   @@unique([blockchainId, walletAddress])
+  @@unique([userId, blockchainId, walletAddress])
 }
 
 model Transaction {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  amount        Float
-  type          String   // credit/debit
-  status        String   // success/failed/pending
-  hash          String
-  riskScore     Float?   // ML-based risk assessment
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id        String            @id @default(uuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoiceId String? 
+  amount    Float
+  type      String
+  status    TransactionStatus
+  hash      String?
+  riskScore Float?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  invoice   Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
 }
 
 model CrossChainTransaction {
-  id                String   @id @default(uuid())
-  userId            String
-  user              User     @relation(fields: [userId], references: [id])
+  id                 String     @id @default(uuid())
+  userId             String
+  user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceBlockchainId String
   sourceBlockchain   Blockchain @relation(fields: [sourceBlockchainId], references: [id])
   destinationAddress String
-  amount            Float
-  assetType         String   // ETH, BTC, USDC, etc
-  status            String   // pending, completed, failed
-  proofHash         String   // Cross-chain proof
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  amount             Float
+  assetType          String
+  status             String
+  proofHash          String
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
 }
 
 model Invoice {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  blockchainId  String
-  blockchain    Blockchain @relation(fields: [blockchainId], references: [id])
-  amount        Float
-  currency      String   // ETH, BTC, USDC, etc
-  dueDate       DateTime
-  status        String   // paid/unpaid/overdue
-  ipfsHash      String?
-  tokenized     Boolean  @default(false)
-  tokenAddress  String?  // Address of tokenized invoice
-  escrowAddress String?  // Smart contract escrow address
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String        @id @default(uuid())
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  blockchainId   String
+  blockchain     Blockchain    @relation(fields: [blockchainId], references: [id])
+  walletAddress  String 
+  amount         Float
+      
+  ethAmount      Float?
+  weiAmount      String?
+  ethPrice       Float?
+  paymentHash    String?
+  paidAt         DateTime?
+  description    String?       @default("")
+  currency       String
+  dueDate        DateTime
+  status         InvoiceStatus @default(UNPAID)
+  ipfsHash       String?
+  tokenized      Boolean       @default(false)
+  tokenAddress   String?
+  escrowAddress  String?
+  subscriptionId String?
+  fee            Float?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  transactions   Transaction[]
+
+  // ✅ CrossChainIdentity relation (optional)
+  crossChainIdentityId String?
+  crossChainIdentity   CrossChainIdentity? @relation("CrossChainIdentityToInvoice", fields: [crossChainIdentityId], references: [id], onDelete: SetNull)
 }
 
 model CreditScoreHistory {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  score         Int
-  factors       Json     // Scoring factors breakdown
-  createdAt     DateTime @default(now())
+  id                     String   @id @default(uuid())
+  userId                 String?
+  user                   User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // ✅ CrossChainIdentity credit score history
+  crossChainIdentityId   String?
+  crossChainIdentity     CrossChainIdentity? @relation("CrossChainIdentityCreditHistory", fields: [crossChainIdentityId], references: [id], onDelete: SetNull)
+  
+  score                  Int
+  factors                Json
+  createdAt              DateTime @default(now())
+}
+
+model QueryUsage {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  month     Int
+  year      Int
+  used      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, month, year])
 }

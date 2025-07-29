@@ -10,6 +10,7 @@ export default function Sidebar() {
         <Link to="/blockchains" className="block text-gray-700 hover:text-indigo-600">Blockchains</Link>
         <Link to="/users" className="block text-gray-700 hover:text-indigo-600">Users</Link>
         <Link to="/invoices" className="block text-gray-700 hover:text-indigo-600">Invoices</Link>
+        <Link to="/user-registry" className="block text-gray-700 hover:text-indigo-600">User-Registry</Link>
       </nav>
     </div>
   );

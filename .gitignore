@@ -7,15 +7,25 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Dependency directories
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+.cache/
+out/
+.next/
+
+# Environment variables
+.env
+.env.*
+!.env.example
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
@@ -23,20 +33,32 @@ dist-ssr
 *.sln
 *.sw?
 
-node_modules
-.env
-
-# Hardhat files
-/cache
-/artifacts
-
-# TypeChain files
-/typechain
-/typechain-types
-
-# solidity-coverage files
-/coverage
+# Hardhat
+/cache/
+/artifacts/
+/coverage/
 /coverage.json
-
-# Hardhat Ignition default folder for deployments against a local node
+/typechain/
+/typechain-types/
 ignition/deployments/chain-31337
+
+# Temporary files
+*.tmp
+*.bak
+*.seed
+*.pid
+*.pid.lock
+
+# IPFS (optional)
+.ipfs/
+.ipfs-log/
+
+# Supabase (optional)
+.supabase/
+
+# Prisma (optional)
+prisma/dev.db
+prisma/migrations/
+
+# System
+Thumbs.db

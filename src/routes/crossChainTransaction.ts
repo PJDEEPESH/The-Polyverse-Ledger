@@ -1,4 +1,4 @@
-// src/routes/crossChainTransaction.ts - COMPLETE IMPLEMENTATION
+// src/routes/crossChainTransaction.ts - PRODUCTION VERSION
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { CrossChainTransactionService } from '../services/crossChainTransaction.js';
@@ -34,8 +34,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
 
       const { userId, sourceBlockchainId, destinationAddress, amount, assetType, proofHash } = parsed.data;
 
-      console.log(`🔄 Creating cross-chain transaction: $${amount} ${assetType} for user ${userId}`);
-
       const newTransaction = await CrossChainTransactionService.createTransaction(
         userId,
         sourceBlockchainId,
@@ -52,8 +50,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Transaction creation error:', error);
-      
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       let statusCode = 500;
       let errorCode = 'TRANSACTION_FAILED';
@@ -91,8 +87,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
         assetType?: string; 
       };
 
-      console.log(`📋 Fetching transactions for user ${userId}`);
-
       // Validate user exists and get plan info
       const planInfo = await checkUserPlanLimits(userId);
       if (!planInfo) {
@@ -127,7 +121,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Get transactions error:', error);
       return reply.status(500).send({ 
         success: false, 
         error: error instanceof Error ? error.message : 'Failed to fetch transactions' 
@@ -139,8 +132,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
   fastify.get('/user/:userId/monthly-summary', async (request, reply) => {
     try {
       const { userId } = request.params as { userId: string };
-
-      console.log(`📊 Fetching monthly summary for user ${userId}`);
 
       // Validate user exists
       const planInfo = await checkUserPlanLimits(userId);
@@ -171,7 +162,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Get monthly summary error:', error);
       return reply.status(500).send({ 
         success: false, 
         error: error instanceof Error ? error.message : 'Failed to fetch summary' 
@@ -195,8 +185,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
 
       const { status, userId } = parsed.data;
 
-      console.log(`🔄 Updating transaction ${transactionId} status to ${status}`);
-
       const updatedTransaction = await CrossChainTransactionService.updateTransactionStatus(
         transactionId, 
         status, 
@@ -210,8 +198,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Update transaction status error:', error);
-      
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       let statusCode = 500;
       
@@ -232,8 +218,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       const { transactionId } = request.params as { transactionId: string };
       const { userId } = request.query as { userId?: string };
 
-      console.log(`🔍 Fetching transaction ${transactionId}`);
-
       const transaction = await CrossChainTransactionService.getTransactionById(transactionId, userId);
 
       if (!transaction) {
@@ -249,7 +233,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Get transaction error:', error);
       return reply.status(500).send({ 
         success: false, 
         error: error instanceof Error ? error.message : 'Failed to fetch transaction' 
@@ -270,8 +253,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
         });
       }
 
-      console.log(`❌ Cancelling transaction ${transactionId} for user ${userId}`);
-
       const cancelledTransaction = await CrossChainTransactionService.cancelTransaction(
         transactionId, 
         userId
@@ -284,8 +265,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Cancel transaction error:', error);
-      
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       let statusCode = 500;
       
@@ -314,8 +293,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
         });
       }
 
-      console.log(`📈 Fetching transaction stats for user ${userId}`);
-
       const stats = await CrossChainTransactionService.getTransactionStats(userId);
 
       return reply.send({ 
@@ -324,7 +301,6 @@ export async function crossChainTransactionRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Get transaction stats error:', error);
       return reply.status(500).send({ 
         success: false, 
         error: error instanceof Error ? error.message : 'Failed to fetch stats' 

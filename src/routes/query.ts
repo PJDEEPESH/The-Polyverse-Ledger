@@ -214,7 +214,6 @@ export async function queryRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Fetch usage error:', error);
       return reply.status(500).send({
         error: 'Failed to fetch usage',
         details: error instanceof Error ? error.message : String(error),
@@ -359,7 +358,6 @@ export async function queryRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Update usage error:', error);
       return reply.status(500).send({
         error: 'Failed to update usage',
         details: error instanceof Error ? error.message : String(error),
@@ -429,7 +427,6 @@ export async function queryRoutes(fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error('Reset usage error:', error);
       return reply.status(500).send({
         error: 'Failed to reset usage',
         details: error instanceof Error ? error.message : String(error),

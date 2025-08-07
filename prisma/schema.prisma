@@ -1,3 +1,5 @@
+// schema.prisma - OPTIMIZED VERSION WITH PERFORMANCE INDEXES
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -40,6 +42,10 @@ model Blockchain {
   invoices     Invoice[]
   identities   CrossChainIdentity[]
   transactions CrossChainTransaction[]
+
+  // ✅ Performance indexes
+  @@index([name], name: "idx_blockchain_name")
+  @@index([ubid], name: "idx_blockchain_ubid")
 }
 
 model Plan {
@@ -55,6 +61,9 @@ model Plan {
 
   users         User[]         @relation("UserPlan")
   organizations Organization[] @relation("OrgPlan")
+
+  // ✅ Performance indexes
+  @@index([name], name: "idx_plan_name")
 }
 
 model Organization {
@@ -69,6 +78,10 @@ model Organization {
   plan        Plan?    @relation("OrgPlan", fields: [planId], references: [id], onDelete: SetNull)
   owner       User     @relation("OrgOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   members     User[]   @relation("OrgMembers")
+
+  // ✅ Performance indexes
+  @@index([ownerId], name: "idx_org_owner")
+  @@index([planId], name: "idx_org_plan")
 }
 
 model User {
@@ -95,6 +108,9 @@ model User {
   trialStartDate DateTime?
   trialUsed      Boolean   @default(false)
 
+  queriesUsed    Int       @default(0)
+  queriesLimit   Int?
+  queryResetDate DateTime?
   queryCount     Int          @default(0)
   lastQueryReset DateTime?
 
@@ -105,7 +121,15 @@ model User {
   creditHistory CreditScoreHistory[]
   queryUsages   QueryUsage[]
 
+  // ✅ Critical performance indexes for wallet lookups
   @@unique([blockchainId, walletAddress])
+  @@index([walletAddress, blockchainId], name: "idx_user_wallet_blockchain")
+  @@index([walletAddress], name: "idx_user_wallet_fast")
+  @@index([blockchainId], name: "idx_user_blockchain")
+  @@index([planId], name: "idx_user_plan")
+  @@index([createdAt], name: "idx_user_created")
+  @@index([queriesUsed], name: "idx_user_queries_used")
+  @@index([queryResetDate], name: "idx_user_query_reset")
 }
 
 model CrossChainIdentity {
@@ -128,8 +152,14 @@ model CrossChainIdentity {
   invoices      Invoice[]  @relation("CrossChainIdentityToInvoice")
   creditHistory CreditScoreHistory[] @relation("CrossChainIdentityCreditHistory")
 
+  // ✅ Critical performance indexes for cross-chain wallet lookups
   @@unique([blockchainId, walletAddress])
   @@unique([userId, blockchainId, walletAddress])
+  @@index([walletAddress, blockchainId], name: "idx_crosschain_wallet_blockchain")
+  @@index([userId], name: "idx_crosschain_user_fast")
+  @@index([walletAddress], name: "idx_crosschain_wallet_fast")
+  @@index([blockchainId], name: "idx_crosschain_blockchain")
+  @@index([createdAt], name: "idx_crosschain_created")
 }
 
 model Transaction {
@@ -146,6 +176,13 @@ model Transaction {
   updatedAt DateTime          @updatedAt
 
   invoice   Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  // ✅ Performance indexes
+  @@index([userId], name: "idx_transaction_user")
+  @@index([invoiceId], name: "idx_transaction_invoice")
+  @@index([status], name: "idx_transaction_status")
+  @@index([createdAt], name: "idx_transaction_created")
+  @@index([hash], name: "idx_transaction_hash")
 }
 
 model CrossChainTransaction {
@@ -161,6 +198,13 @@ model CrossChainTransaction {
   proofHash          String
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
+
+  // ✅ Performance indexes
+  @@index([userId], name: "idx_crosschain_tx_user")
+  @@index([sourceBlockchainId], name: "idx_crosschain_tx_blockchain")
+  @@index([status], name: "idx_crosschain_tx_status")
+  @@index([destinationAddress], name: "idx_crosschain_tx_destination")
+  @@index([createdAt], name: "idx_crosschain_tx_created")
 }
 
 model Invoice {
@@ -195,6 +239,15 @@ model Invoice {
   // ✅ CrossChainIdentity relation (optional)
   crossChainIdentityId String?
   crossChainIdentity   CrossChainIdentity? @relation("CrossChainIdentityToInvoice", fields: [crossChainIdentityId], references: [id], onDelete: SetNull)
+
+  // ✅ Performance indexes
+  @@index([userId], name: "idx_invoice_user")
+  @@index([walletAddress, blockchainId], name: "idx_invoice_wallet_blockchain")
+  @@index([status], name: "idx_invoice_status")
+  @@index([crossChainIdentityId], name: "idx_invoice_crosschain")
+  @@index([dueDate], name: "idx_invoice_due_date")
+  @@index([createdAt], name: "idx_invoice_created")
+  @@index([paymentHash], name: "idx_invoice_payment_hash")
 }
 
 model CreditScoreHistory {
@@ -209,6 +262,12 @@ model CreditScoreHistory {
   score                  Int
   factors                Json
   createdAt              DateTime @default(now())
+
+  // ✅ Performance indexes
+  @@index([userId], name: "idx_credit_history_user")
+  @@index([crossChainIdentityId], name: "idx_credit_history_crosschain")
+  @@index([createdAt], name: "idx_credit_history_created")
+  @@index([score], name: "idx_credit_history_score")
 }
 
 model QueryUsage {
@@ -221,5 +280,9 @@ model QueryUsage {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // ✅ Critical performance indexes for usage lookups
   @@unique([userId, month, year])
+  @@index([userId, month, year], name: "idx_query_usage_user_period")
+  @@index([userId], name: "idx_query_usage_user")
+  @@index([year, month], name: "idx_query_usage_period")
 }

@@ -40,6 +40,11 @@ interface Invoice {
     ethPrice: number;
     displayText: string;
   };
+  source?: string;
+  userId?: string;
+  crossChainIdentityId?: string;
+  userWalletAddress?: string;
+  walletAddress?: string;
 }
 
 interface NetworkInfo {
@@ -145,14 +150,6 @@ const InvoicesPage: React.FC = () => {
     });
   }, []);
 
-  // Auto-clear messages
-  useEffect(() => {
-    if (error) {
-      const timer = setTimeout(() => setError(""), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [error]);
-
   useEffect(() => {
     if (success) {
       const timer = setTimeout(() => setSuccess(""), 5000);
@@ -162,7 +159,6 @@ const InvoicesPage: React.FC = () => {
 
   // Safe MetaMask event handlers
   const handleAccountsChanged = useCallback((accounts: string[]) => {
-    console.log('Accounts changed:', accounts);
     try {
       if (accounts.length === 0) {
         setIsConnected(false);
@@ -177,12 +173,11 @@ const InvoicesPage: React.FC = () => {
         setTimeout(() => fetchInvoices(), 100);
       }
     } catch (err) {
-      console.error('Error handling account change:', err);
+      // Error handling
     }
   }, [resetMessages]);
 
   const handleChainChanged = useCallback((chainId: string) => {
-    console.log('Network changed to:', chainId);
     try {
       setLastFetchTime(0);
       setTimeout(async () => {
@@ -195,12 +190,11 @@ const InvoicesPage: React.FC = () => {
           });
           await fetchInvoices();
         } catch (err) {
-          console.error('Error handling chain change:', err);
           setError('Network change detected. Please refresh the page.');
         }
       }, 100);
     } catch (err) {
-      console.error('Error in chain change handler:', err);
+      // Error handling
     }
   }, []);
 
@@ -217,7 +211,7 @@ const InvoicesPage: React.FC = () => {
       window.ethereum.on('accountsChanged', handleAccountsChanged);
       window.ethereum.on('chainChanged', handleChainChanged);
     } catch (err) {
-      console.error('Error setting up MetaMask listeners:', err);
+      // Error handling
     }
 
     return () => {
@@ -227,7 +221,7 @@ const InvoicesPage: React.FC = () => {
           window.ethereum.removeListener('chainChanged', handleChainChanged);
         }
       } catch (err) {
-        console.error('Error removing MetaMask listeners:', err);
+        // Error handling
       }
     };
   }, [handleAccountsChanged, handleChainChanged]);
@@ -265,7 +259,6 @@ const InvoicesPage: React.FC = () => {
       });
 
     } catch (err) {
-      console.error('Price conversion error:', err);
       setPriceConversion(prev => ({
         ...prev,
         loading: false,
@@ -302,155 +295,6 @@ const InvoicesPage: React.FC = () => {
     }
   }, [amount]);
 
-  // ✅ CORRECTED: fetchInvoices - Remove pre-validation, allow auto-registration
-  const fetchInvoices = useCallback(async () => {
-    const now = Date.now();
-    if (now - lastFetchTime < CACHE_DURATION && invoices.length > 0) {
-      console.log('Using cached invoice data');
-      setLoading(false);
-      setLastFetchTime(now);
-      return;
-    }
-
-    if (isFetchingRef.current) {
-      console.log('Fetch already in progress');
-      return;
-    }
-
-    isFetchingRef.current = true;
-    
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
-
-    try {
-      setLoading(true);
-      resetMessages();
-
-      if (!window.ethereum) {
-        throw new Error("Please install MetaMask to use this application");
-      }
-
-      const accounts = await window.ethereum.request({ 
-        method: 'eth_requestAccounts' 
-      });
-      
-      if (accounts.length === 0) {
-        throw new Error("Please connect your wallet");
-      }
-
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const userAddress = await signer.getAddress();
-      const network = await provider.getNetwork();
-      const chainId = network.chainId.toString();
-
-      setUserWalletAddress(userAddress);
-      setIsConnected(true);
-      setNetworkInfo({
-        chainId,
-        name: network.name,
-      });
-
-      if (signal.aborted) return;
-
-      // ✅ CORRECTED: Try to get user data, but don't fail if not found
-      let userData = null;
-      try {
-        const userRes = await axios.get(`${API_BASE}/api/v1/user/wallet/${userAddress}/${chainId}`, { 
-          signal,
-          timeout: 10000,
-        });
-        userData = userRes.data?.data;
-      } catch (userError) {
-        console.log('User not found in primary table, will check CrossChainIdentity during invoice creation');
-        // Don't throw error here - let invoice creation handle it
-      }
-
-      // ✅ Set blockchainId if available, otherwise use chainId
-      setBlockchainId(userData?.blockchainId || chainId);
-
-      if (signal.aborted) return;
-
-      // ✅ CORRECTED: Try to fetch invoices, but handle case where user doesn't exist yet
-      let fetchedInvoices = [];
-      try {
-        const invoicesRes = await axios.get(`${API_BASE}/api/v1/invoices/wallet/${userAddress}/${userData?.blockchainId || chainId}`, { 
-          signal,
-          timeout: 15000,
-        });
-        
-        fetchedInvoices = invoicesRes.data.data?.map((inv: any) => ({
-          id: inv.id,
-          amount: inv.amount,
-          ethAmount: inv.ethAmount,
-          weiAmount: inv.weiAmount,
-          ethPrice: inv.ethPrice,
-          date: new Date(inv.dueDate),
-          dueDate: inv.dueDate,
-          PAID: inv.status === "PAID",
-          status: inv.status,
-          description: inv.description || "",
-          createdAt: inv.createdAt || new Date().toISOString(),
-          updatedAt: inv.updatedAt || new Date().toISOString(),
-          blockchainHash: inv.paymentHash || inv.blockchainHash,
-          conversion: inv.conversion || null,
-        })) || [];
-      } catch (invoiceError) {
-        console.log('No invoices found for this wallet, starting fresh');
-        fetchedInvoices = [];
-      }
-      
-      setInvoices(fetchedInvoices);
-      setLastFetchTime(now);
-      retryCountRef.current = 0;
-
-    } catch (err: unknown) {
-      if (axios.isCancel(err) || (err as Error).name === 'AbortError') {
-        console.log('Request was cancelled');
-        return;
-      }
-
-      console.error("Error in fetchInvoices:", err);
-      
-      if (retryCountRef.current < MAX_RETRIES && 
-          (err instanceof Error && err.message.includes('timeout')) ||
-          (axios.isAxiosError(err) && !err.response)) {
-        retryCountRef.current++;
-        console.log(`Retrying... Attempt ${retryCountRef.current}/${MAX_RETRIES}`);
-        setTimeout(() => fetchInvoices(), Math.pow(2, retryCountRef.current) * 1000);
-        return;
-      }
-
-      if (axios.isAxiosError(err)) {
-        const axiosError = err as AxiosError;
-        const status = axiosError.response?.status;
-        const errorData = axiosError.response?.data as any;
-        
-        if (status === 403) {
-          setError("Access denied. Please check your wallet permissions.");
-        } else if (status === 429) {
-          setError("Too many requests. Please wait a moment and try again.");
-        } else if (status && status >= 500) {
-          setError("Server error. Please try again later.");
-        } else {
-          setError(errorData?.error || "Failed to load data. You can still create invoices.");
-        }
-      } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Failed to connect to the service.");
-      }
-    } finally {
-      setLoading(false);
-      isFetchingRef.current = false;
-    }
-  }, [lastFetchTime, invoices.length, resetMessages]);
-
-  // Form validation
   const validateForm = useCallback((): boolean => {
     resetMessages();
     
@@ -509,9 +353,6 @@ const InvoicesPage: React.FC = () => {
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
       const contract = getInvoiceManagerContract(signer);
-      
-      console.log('📤 Creating blockchain transaction...');
-      console.log('Contract address:', await contract.getAddress());
 
       // Convert ETH to Wei
       let weiAmount: bigint;
@@ -519,9 +360,7 @@ const InvoicesPage: React.FC = () => {
         const limitedPrecisionEth = Math.floor(ethAmount * 100000000) / 100000000;
         const ethString = limitedPrecisionEth.toFixed(8);
         weiAmount = ethers.parseEther(ethString);
-        console.log('Wei amount:', weiAmount.toString());
       } catch (conversionError: unknown) {
-        console.error('Wei conversion error:', conversionError);
         const errorMessage = conversionError instanceof Error 
           ? conversionError.message 
           : 'Unknown conversion error';
@@ -529,12 +368,6 @@ const InvoicesPage: React.FC = () => {
       }
 
       const dueDateTimestamp = Math.floor(dueDate.getTime() / 1000);
-      
-      console.log('Attempting to call contract with parameters:', {
-        recipient: recipientAddress,
-        amount: weiAmount.toString(),
-        dueDate: dueDateTimestamp
-      });
 
       setBlockchainTx({ hash: null, status: 'waiting_signature', error: null });
 
@@ -545,14 +378,12 @@ const InvoicesPage: React.FC = () => {
         dueDateTimestamp
       );
 
-      console.log('⏳ Transaction submitted:', tx.hash);
       setBlockchainTx({ hash: tx.hash, status: 'pending', error: null });
 
       // Wait for confirmation
       const receipt = await tx.wait(1);
       
       if (receipt.status === 1) {
-        console.log('✅ Transaction confirmed:', tx.hash);
         setBlockchainTx({ hash: tx.hash, status: 'confirmed', error: null });
         
         // Try to extract invoice ID from events
@@ -562,19 +393,17 @@ const InvoicesPage: React.FC = () => {
             for (const log of receipt.logs) {
               try {
                 const parsedLog = contract.interface.parseLog(log);
-                console.log('📝 Event:', parsedLog?.name, parsedLog?.args);
                 
                 if (parsedLog?.name === 'InvoiceCreated' || parsedLog?.name === 'InvoiceGenerated') {
                   blockchainInvoiceId = parsedLog.args?.invoiceId?.toString() || 
                                        parsedLog.args?.id?.toString();
-                  console.log('🆔 Blockchain Invoice ID:', blockchainInvoiceId);
                 }
               } catch (parseError) {
-                console.log('⚠️ Could not parse log:', parseError);
+                // Continue to next log
               }
             }
           } catch (eventError) {
-            console.warn('⚠️ Error parsing events:', eventError);
+            // Event parsing error, continue without blockchain ID
           }
         }
         
@@ -590,8 +419,6 @@ const InvoicesPage: React.FC = () => {
       }
       
     } catch (error: unknown) {
-      console.error('❌ Blockchain transaction failed:', error);
-      
       let errorMessage = 'Unknown blockchain error';
       if (error instanceof Error && error.message) {
         errorMessage = error.message;
@@ -614,7 +441,263 @@ const InvoicesPage: React.FC = () => {
     }
   }, []);
 
-  // ✅ CORRECTED: handleSubmit with proper error handling for CrossChain system
+  // Updated fetchInvoices with wallet filtering
+  const fetchInvoices = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastFetchTime < CACHE_DURATION && invoices.length > 0) {
+      setLoading(false);
+      setLastFetchTime(now);
+      return;
+    }
+
+    if (isFetchingRef.current) {
+      return;
+    }
+
+    isFetchingRef.current = true;
+    
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    try {
+      setLoading(true);
+      resetMessages();
+
+      if (!window.ethereum) {
+        throw new Error("Please install MetaMask to use this application");
+      }
+
+      const accounts = await window.ethereum.request({ 
+        method: 'eth_requestAccounts' 
+      });
+      
+      if (accounts.length === 0) {
+        throw new Error("Please connect your wallet");
+      }
+
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const userAddress = await signer.getAddress();
+      const network = await provider.getNetwork();
+      const chainId = network.chainId.toString();
+
+      setUserWalletAddress(userAddress);
+      setIsConnected(true);
+      setNetworkInfo({
+        chainId,
+        name: network.name,
+      });
+
+      if (signal.aborted) return;
+
+      try {
+        let invoicesRes;
+        
+        // Try multiple approaches for fetching invoices
+        if (NODE_ENV === 'development') {
+          try {
+            invoicesRes = await axios.get(
+              `${API_BASE}/api/v1/invoices/wallet/${userAddress}/${chainId}`, 
+              { 
+                signal,
+                timeout: 15000,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Wallet-Address': userAddress,
+                  'X-Blockchain-Id': chainId,
+                  'Authorization': `Bearer dev-token-${userAddress}`
+                }
+              }
+            );
+          } catch (devError) {
+            invoicesRes = await axios.get(
+              `${API_BASE}/api/v1/invoices/wallet/${userAddress}/${chainId}`, 
+              { 
+                signal,
+                timeout: 15000,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Wallet-Address': userAddress,
+                  'X-Blockchain-Id': chainId
+                }
+              }
+            );
+          }
+        } else {
+          invoicesRes = await axios.get(
+            `${API_BASE}/api/v1/invoices/wallet/${userAddress}/${chainId}`, 
+            { 
+              signal,
+              timeout: 15000,
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Wallet-Address': userAddress,
+                'X-Blockchain-Id': chainId
+              }
+            }
+          );
+        }
+        
+        // Map and filter invoices for the connected wallet
+        let fetchedInvoices = invoicesRes.data.data?.map((inv: any) => ({
+          id: inv.id,
+          amount: inv.amount,
+          ethAmount: inv.ethAmount,
+          weiAmount: inv.weiAmount,
+          ethPrice: inv.ethPrice,
+          date: new Date(inv.dueDate),
+          dueDate: inv.dueDate,
+          PAID: inv.status === "PAID",
+          status: inv.status,
+          description: inv.description || "",
+          createdAt: inv.createdAt || new Date().toISOString(),
+          updatedAt: inv.updatedAt || new Date().toISOString(),
+          blockchainHash: inv.paymentHash || inv.blockchainHash,
+          conversion: inv.conversion || null,
+          source: inv.source || 'unknown',
+          userId: inv.userId || null,
+          crossChainIdentityId: inv.crossChainIdentityId || null,
+          userWalletAddress: inv.userWalletAddress || null,
+          walletAddress: inv.walletAddress || null,
+        })) || [];
+
+        // Client-side filtering to ensure only wallet-related invoices are shown
+        fetchedInvoices = fetchedInvoices.filter((invoice: any) => {
+          const isCreator = invoice.userWalletAddress && 
+                           invoice.userWalletAddress.toLowerCase() === userAddress.toLowerCase();
+          const isRecipient = invoice.walletAddress && 
+                             invoice.walletAddress.toLowerCase() === userAddress.toLowerCase();
+          
+          return isCreator || isRecipient;
+        });
+
+        setInvoices(fetchedInvoices);
+        setBlockchainId(chainId);
+        setLastFetchTime(now);
+        retryCountRef.current = 0;
+        setError('');
+
+      } catch (fetchError) {
+        if (axios.isAxiosError(fetchError)) {
+          const status = fetchError.response?.status;
+          const errorData = fetchError.response?.data as any;
+          
+          if (status === 401 || status === 404) {
+            try {
+              // Try alternative endpoint with wallet filtering
+              const altRes = await axios.get(
+                `${API_BASE}/api/v1/invoices`, 
+                { 
+                  signal,
+                  timeout: 10000,
+                  params: {
+                    walletAddress: userAddress,
+                    blockchainId: chainId,
+                    filterByWallet: true
+                  },
+                  headers: {
+                    'Content-Type': 'application/json'
+                  }
+                }
+              );
+              
+              if (altRes.data && altRes.data.data) {
+                let fetchedInvoices = altRes.data.data?.map((inv: any) => ({
+                  id: inv.id,
+                  amount: inv.amount,
+                  ethAmount: inv.ethAmount,
+                  weiAmount: inv.weiAmount,
+                  ethPrice: inv.ethPrice,
+                  date: new Date(inv.dueDate),
+                  dueDate: inv.dueDate,
+                  PAID: inv.status === "PAID",
+                  status: inv.status,
+                  description: inv.description || "",
+                  createdAt: inv.createdAt || new Date().toISOString(),
+                  updatedAt: inv.updatedAt || new Date().toISOString(),
+                  blockchainHash: inv.paymentHash || inv.blockchainHash,
+                  conversion: inv.conversion || null,
+                  source: inv.source || 'unknown',
+                  userId: inv.userId || null,
+                  crossChainIdentityId: inv.crossChainIdentityId || null,
+                  userWalletAddress: inv.userWalletAddress || null,
+                  walletAddress: inv.walletAddress || null,
+                })) || [];
+
+                // Apply client-side filtering
+                fetchedInvoices = fetchedInvoices.filter((invoice: any) => {
+                  const isCreator = invoice.userWalletAddress && 
+                                   invoice.userWalletAddress.toLowerCase() === userAddress.toLowerCase();
+                  const isRecipient = invoice.walletAddress && 
+                                     invoice.walletAddress.toLowerCase() === userAddress.toLowerCase();
+                  
+                  return isCreator || isRecipient;
+                });
+
+                setInvoices(fetchedInvoices);
+                setBlockchainId(chainId);
+                setLastFetchTime(now);
+                retryCountRef.current = 0;
+                setError('');
+                return;
+              }
+            } catch (altError) {
+              // Alternative endpoint failed
+            }
+            
+            // No invoices found for this wallet (normal for new wallets)
+            setInvoices([]);
+            setError('');
+            
+          } else if (status === 403) {
+            setError("Access denied. Please check your wallet permissions.");
+          } else if (status === 429) {
+            setError("Too many requests. Please wait a moment and try again.");
+          } else if (status && status >= 500) {
+            setError("Server error. Please try again later.");
+          } else {
+            setInvoices([]);
+            setError('');
+          }
+        }
+        
+        setBlockchainId(chainId);
+        setLastFetchTime(now);
+      }
+
+    } catch (err: unknown) {
+      if (axios.isCancel(err) || (err as Error).name === 'AbortError') {
+        return;
+      }
+
+      // Only retry for genuine network errors
+      if (retryCountRef.current < MAX_RETRIES && 
+          (err instanceof Error && (
+            err.message.includes('timeout') || 
+            err.message.includes('network') ||
+            err.message.includes('fetch')
+          ))) {
+        retryCountRef.current++;
+        setTimeout(() => fetchInvoices(), Math.pow(2, retryCountRef.current) * 1000);
+        return;
+      }
+
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Failed to connect to the service.");
+      }
+    } finally {
+      setLoading(false);
+      isFetchingRef.current = false;
+    }
+  }, [lastFetchTime, invoices.length, resetMessages]);
+
+  // Updated handleSubmit with better success messaging
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     resetMessages();
@@ -636,8 +719,6 @@ const InvoicesPage: React.FC = () => {
 
       const sanitizedWallet = sanitizeInput(wallet);
       
-      console.log('Creating invoice with CrossChain support...');
-      
       // Create blockchain transaction first
       const blockchainResult = await createBlockchainTransaction(
         sanitizedWallet,
@@ -645,11 +726,8 @@ const InvoicesPage: React.FC = () => {
         new Date(dueDate)
       );
 
-      console.log('✅ Blockchain transaction successful:', blockchainResult);
-
-      // ✅ CORRECTED: Send invoice data with proper error handling
       const invoiceData = {
-        blockchainId: blockchainId || networkInfo?.chainId || 'ethereum', // fallback
+        blockchainId: blockchainId || networkInfo?.chainId || 'ethereum',
         walletAddress: sanitizedWallet,
         amount: parseFloat(amount),
         dueDate,
@@ -660,19 +738,16 @@ const InvoicesPage: React.FC = () => {
         userWalletAddress,
         blockchainTxHash: blockchainResult.txHash,
         blockchainInvoiceId: blockchainResult.blockchainInvoiceId,
-        // ✅ REMOVED: description field
       };
-
-      console.log('💾 Saving to database:', invoiceData);
 
       const response = await axios.post(`${API_BASE}/api/v1/invoices`, invoiceData, {
         timeout: 30000,
         headers: {
           'Content-Type': 'application/json',
+          'X-Wallet-Address': userWalletAddress,
+          'X-Blockchain-Id': networkInfo?.chainId || blockchainId
         }
       });
-
-      console.log('Database record created:', response.data);
 
       // Success
       handleCloseModal();
@@ -681,11 +756,14 @@ const InvoicesPage: React.FC = () => {
       successMessage += `\n🔗 Blockchain: ${blockchainResult.status}`;
       successMessage += `\n📋 Tx: ${blockchainResult.txHash?.slice(0, 10)}...`;
       successMessage += `\n💱 ${priceConversion.displayText} at $${priceConversion.ethPrice.toFixed(2)}/ETH`;
-      successMessage += `\n🏦 Source: ${response.data.data?.source || 'registered'} wallet`;
       
-      // Show existing registration confirmation
-      if (response.data.data?.existingRegistration) {
-        successMessage += `\n✅ Using existing wallet registration`;
+      if (response.data.message) {
+        const message = response.data.message.toLowerCase();
+        if (message.includes('crosschain')) {
+          successMessage += `\n👤 Used cross-chain wallet identity`;
+        } else if (message.includes('primary')) {
+          successMessage += `\n👤 Used primary wallet registration`;
+        }
       }
       
       setSuccess(successMessage);
@@ -694,18 +772,17 @@ const InvoicesPage: React.FC = () => {
       await fetchInvoices();
       
     } catch (err: unknown) {
-      console.error("Error creating invoice:", err);
-      
       if (axios.isAxiosError(err)) {
         const axiosError = err as AxiosError;
         const errorData = axiosError.response?.data as any;
         const status = axiosError.response?.status;
         
-        // ✅ CORRECTED: Handle all possible error codes from backend
         if (status === 400 && errorData?.code === 'WALLET_NOT_REGISTERED') {
-          setFormError("Wallet Not Registered: This wallet address is not associated with any registered user. Please register the wallet first using the user management system.");
+          setFormError("System error: Auto-registration failed. Please try again.");
         } else if (status === 429) {
           setFormError("Monthly transaction limit exceeded. Please upgrade your plan.");
+        } else if (status === 403 && errorData?.code === 'WALLET_LIMIT_EXCEEDED') {
+          setFormError(`Wallet Limit Exceeded: ${errorData.error}. Please upgrade your plan to add more wallets.`);
         } else {
           setFormError(errorData?.error || "Failed to save invoice to database.");
         }
@@ -727,11 +804,6 @@ const InvoicesPage: React.FC = () => {
     }
 
     try {
-      console.log('Marking invoice as PAID:', {
-        invoiceId,
-        userWalletAddress,
-      });
-
       await axios.post(`${API_BASE}/api/v1/invoices/${invoiceId}/markPaid`, {
         userWalletAddress,
       });
@@ -741,7 +813,6 @@ const InvoicesPage: React.FC = () => {
       await fetchInvoices();
       
     } catch (err: unknown) {
-      console.error("Error marking invoice as PAID:", err);
       if (axios.isAxiosError(err)) {
         const errorData = err.response?.data as any;
         setError(`❌ Failed to mark as PAID: ${errorData?.error || "Unknown error"}`);
@@ -825,7 +896,7 @@ const InvoicesPage: React.FC = () => {
       const usdAmount = typeof invoice.amount === 'string' ? parseFloat(invoice.amount) : invoice.amount;
       if (isNaN(usdAmount)) return invoice.amount.toString();
       
-      let display = `$${usdAmount.toFixed(2)} USD`;
+      let display = `${usdAmount.toFixed(2)} USD`;
       
       if (invoice.ethAmount) {
         display += ` (~${invoice.ethAmount.toFixed(6)} ETH)`;
@@ -853,7 +924,6 @@ const InvoicesPage: React.FC = () => {
 
   // Initial load
   useEffect(() => {
-    console.log('Component mounted, starting initial fetch...');
     fetchInvoices();
     
     return () => {
@@ -869,8 +939,6 @@ const InvoicesPage: React.FC = () => {
       isFetchingRef.current = false;
     };
   }, []);
-
-  console.log('Render state:', { loading, isConnected, invoices: invoices.length, error });
 
   return (
     <Layout>
@@ -928,7 +996,7 @@ const InvoicesPage: React.FC = () => {
           )}
 
           {/* Error Display */}
-          {error && (
+          {error && error.trim() !== '' && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg shadow-sm">
               <div className="flex items-start">
                 <AlertCircle className="w-5 h-5 text-red-600 mr-3 mt-0.5 flex-shrink-0" />
@@ -1037,7 +1105,6 @@ const InvoicesPage: React.FC = () => {
                       <th className="px-6 py-4 font-medium text-gray-700">Amount</th>
                       <th className="px-6 py-4 font-medium text-gray-700">Due Date</th>
                       <th className="px-6 py-4 font-medium text-gray-700">Status</th>
-                      <th className="px-6 py-4 font-medium text-gray-700">Blockchain</th>
                       <th className="px-6 py-4 font-medium text-gray-700">Actions</th>
                     </tr>
                   </thead>
@@ -1089,22 +1156,6 @@ const InvoicesPage: React.FC = () => {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          {invoice.blockchainHash ? (
-                            <div className="text-xs">
-                              <a
-                                href={`https://etherscan.io/tx/${invoice.blockchainHash}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 underline"
-                              >
-                                {invoice.blockchainHash.slice(0, 10)}...
-                              </a>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-400">No hash</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4">
                           {!invoice.PAID && (
                             <button
                               onClick={() => handlePayInvoice(invoice.id)}
@@ -1129,7 +1180,7 @@ const InvoicesPage: React.FC = () => {
             )}
           </div>
 
-          {/* ✅ CORRECTED: Create Invoice Modal */}
+          {/* Create Invoice Modal */}
           {showModal && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">

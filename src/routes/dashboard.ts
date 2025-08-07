@@ -66,7 +66,6 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
 
       reply.send(activity.slice(0, 6));
     } catch (err) {
-      console.error('Error fetching activity:', err);
       reply.status(500).send({ error: 'Failed to fetch activity' });
     }
   });

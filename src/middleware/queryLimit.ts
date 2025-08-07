@@ -1,4 +1,4 @@
-// src/middleware/queryLimit.ts - COMPLETE VERSION WITH CROSSCHAIN SUPPORT
+// src/middleware/queryLimit.ts - PRODUCTION VERSION WITH CROSSCHAIN SUPPORT
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { supabase } from '../lib/supabaseClient.js';
 import { isTrialActive } from '../utils/isTrialActive.js';
@@ -38,22 +38,20 @@ interface QueryContext {
 
 interface PlanLimits {
   Free: { queryLimit: 100; userLimit: 1; trialDays: 5 };
-  Basic: { queryLimit: 1000; userLimit: 1; price: 1900 };
-  Pro: { queryLimit: 15000; userLimit: 3; price: 2900 };
-  Premium: { queryLimit: 100000; userLimit: 5; price: 4900 };
+  Basic: { queryLimit: 1000; userLimit: 1; price: 149 };
+  Pro: { queryLimit: 15000; userLimit: 3; price: 669 };
+  Premium: { queryLimit: 100000; userLimit: 5; price: 3699 };
 }
 
 const PLAN_LIMITS: PlanLimits = {
   Free: { queryLimit: 100, userLimit: 1, trialDays: 5 },
-  Basic: { queryLimit: 1000, userLimit: 1, price: 1900 },
-  Pro: { queryLimit: 15000, userLimit: 3, price: 2900 },
-  Premium: { queryLimit: 100000, userLimit: 5, price: 4900 }
+  Basic: { queryLimit: 1000, userLimit: 1, price: 149 },
+  Pro: { queryLimit: 15000, userLimit: 3, price: 669 },
+  Premium: { queryLimit: 100000, userLimit: 5, price: 3699 }
 };
 
-// ✅ NEW: Enhanced function to find user from wallet (supports CrossChainIdentity)
+// ✅ Enhanced function to find user from wallet (supports CrossChainIdentity)
 async function findUserByWallet(walletAddress: string, blockchainId: string) {
-  console.log(`🔍 Looking for user with wallet: ${walletAddress} on chain: ${blockchainId}`);
-  
   // Check primary wallet (User table)
   const { data: primaryUser, error: primaryError } = await supabase
     .from('User')
@@ -76,12 +74,11 @@ async function findUserByWallet(walletAddress: string, blockchainId: string) {
     .eq('blockchainId', blockchainId.toString())
     .maybeSingle();
 
-  if (primaryError) {
-    console.error('❌ Error checking primary user:', primaryError);
+  if (primaryError && primaryError.code !== 'PGRST116') {
+    throw new Error(`Primary user query failed: ${primaryError.message}`);
   }
 
   if (primaryUser) {
-    console.log(`✅ Found primary user: ${primaryUser.id}`);
     return {
       user: primaryUser,
       source: 'primary' as const,
@@ -89,7 +86,7 @@ async function findUserByWallet(walletAddress: string, blockchainId: string) {
     };
   }
 
-  // ✅ NEW: Check CrossChainIdentity table
+  // Check CrossChainIdentity table
   const { data: crossChainUser, error: crossChainError } = await supabase
     .from('CrossChainIdentity')
     .select(`
@@ -115,13 +112,12 @@ async function findUserByWallet(walletAddress: string, blockchainId: string) {
     .eq('blockchainId', blockchainId.toString())
     .maybeSingle();
 
-  if (crossChainError) {
-    console.error('❌ Error checking CrossChain user:', crossChainError);
+  if (crossChainError && crossChainError.code !== 'PGRST116') {
+    throw new Error(`CrossChain user query failed: ${crossChainError.message}`);
   }
 
   if (crossChainUser && crossChainUser.User) {
     const userData = Array.isArray(crossChainUser.User) ? crossChainUser.User[0] : crossChainUser.User;
-    console.log(`✅ Found CrossChain user: ${userData.id} (via CrossChainIdentity: ${crossChainUser.id})`);
     return {
       user: userData,
       source: 'crosschain' as const,
@@ -129,7 +125,6 @@ async function findUserByWallet(walletAddress: string, blockchainId: string) {
     };
   }
 
-  console.log(`❌ No user found for wallet: ${walletAddress}/${blockchainId}`);
   return null;
 }
 
@@ -172,8 +167,7 @@ async function getOrganizationPlan(orgId: string) {
     }
     return null;
   } catch (error) {
-    console.error('Error fetching organization plan:', error);
-    return null;
+    throw new Error(`Failed to fetch organization plan: ${error}`);
   }
 }
 
@@ -185,25 +179,19 @@ async function resolveEffectivePlan(user: any) {
 
   // 1. Check for organization plan first (highest priority)
   if (user.orgId) {
-    console.log(`🏢 User ${user.id} is in organization ${user.orgId}, checking org plan`);
-    
     const orgPlan = await getOrganizationPlan(user.orgId);
     if (orgPlan) {
-      console.log(`✅ Found organization plan: ${orgPlan.name} (${orgPlan.currentUsers} users)`);
       effectivePlan = orgPlan;
       planSource = 'organization';
       currentUsers = orgPlan.currentUsers;
       return { effectivePlan, planSource, currentUsers };
     }
-    
-    console.log(`⚠️ No organization plan found, falling back to individual plan`);
   }
 
   // 2. Check for individual plan
   if (user.planId && user.Plan) {
     const individualPlan = Array.isArray(user.Plan) ? user.Plan[0] : user.Plan;
     if (individualPlan) {
-      console.log(`✅ Found individual plan: ${individualPlan.name}`);
       effectivePlan = {
         ...individualPlan,
         source: 'individual'
@@ -214,7 +202,6 @@ async function resolveEffectivePlan(user: any) {
   }
 
   // 3. Default to Free plan
-  console.log(`🆓 No paid plan found, using Free plan`);
   const { data: freePlan } = await supabase
     .from('Plan')
     .select('id, name, queryLimit, userLimit')
@@ -243,11 +230,8 @@ async function getOrganizationUsage(orgId: string, month: number, year: number) 
     if (membersError) throw membersError;
 
     if (!members || members.length === 0) {
-      console.log(`📊 No members found in organization ${orgId}`);
       return 0;
     }
-
-    console.log(`👥 Found ${members.length} members in organization ${orgId}`);
 
     // Sum usage for all organization members
     const memberIds = members.map(member => member.id);
@@ -261,12 +245,9 @@ async function getOrganizationUsage(orgId: string, month: number, year: number) 
     if (usageError) throw usageError;
 
     const totalUsage = orgUsage?.reduce((sum, record) => sum + record.used, 0) || 0;
-    console.log(`📈 Total organization usage: ${totalUsage}`);
-    
     return totalUsage;
   } catch (error) {
-    console.error('Error calculating organization usage:', error);
-    return 0;
+    throw new Error(`Failed to calculate organization usage: ${error}`);
   }
 }
 
@@ -350,7 +331,6 @@ async function getPaidPlanUsage(user: any, planName: 'Pro' | 'Premium', month: n
 // ✅ Helper function to get wallet info from invoice ID
 async function getWalletInfoFromInvoice(invoiceId: string) {
   try {
-    console.log(`🔍 Fetching wallet info for invoice: ${invoiceId}`);
     const invoice = await prisma.invoice.findUnique({
       where: { id: invoiceId },
       include: {
@@ -364,18 +344,15 @@ async function getWalletInfoFromInvoice(invoiceId: string) {
     });
 
     if (!invoice || !invoice.user) {
-      console.log(`❌ No invoice or user found for ID: ${invoiceId}`);
       return null;
     }
 
-    console.log(`✅ Found wallet info: ${invoice.user.walletAddress}, blockchain: ${invoice.user.blockchainId}`);
     return {
       walletAddress: invoice.user.walletAddress,
       blockchainId: invoice.user.blockchainId
     };
   } catch (error) {
-    console.error('Error fetching invoice wallet info:', error);
-    return null;
+    throw new Error(`Failed to fetch invoice wallet info: ${error}`);
   }
 }
 
@@ -429,8 +406,6 @@ export async function queryLimitHook(
   request: FastifyRequest,
   reply: FastifyReply
 ) {
-  console.log(`🚀 Query limit hook triggered for URL: ${request.url}`);
-  
   try {
     const body = request.body as QueryLimitBody;
     const params = request.params as QueryLimitParams;
@@ -441,33 +416,26 @@ export async function queryLimitHook(
       request.url.includes(route) || request.routerPath?.includes(route)
     );
 
-    console.log(`📋 Route analysis: isWalletLessRoute = ${isWalletLessRoute}`);
-
     let walletAddress: string | undefined;
     let blockchainId: string | undefined;
 
     if (isWalletLessRoute) {
       const invoiceId = params?.id;
-      console.log(`🔑 Invoice ID from params: ${invoiceId}`);
       
       if (invoiceId) {
         const walletInfo = await getWalletInfoFromInvoice(invoiceId);
         if (walletInfo) {
           walletAddress = walletInfo.walletAddress;
           blockchainId = walletInfo.blockchainId;
-          console.log(`✅ Wallet info extracted: ${walletAddress}, ${blockchainId}`);
         } else {
-          console.warn(`⚠️ Could not find wallet info for invoice ${invoiceId}, continuing without tracking`);
           return;
         }
       } else {
-        console.warn('⚠️ No invoice ID found for wallet-less route, continuing without tracking');
         return;
       }
     } else {
       walletAddress = body?.walletAddress || params?.walletAddress;
       blockchainId = body?.blockchainId || params?.blockchainId;
-      console.log(`📝 Regular route wallet info: ${walletAddress}, ${blockchainId}`);
     }
 
     const shouldIncrementUsage = body?.incrementUsage !== false;
@@ -476,48 +444,38 @@ export async function queryLimitHook(
     // Validate wallet info
     if (!walletAddress || !walletAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
       if (!isWalletLessRoute) {
-        console.log(`❌ Invalid wallet for regular route: ${walletAddress}`);
         return reply.status(400).send({
           success: false,
           error: 'Invalid or missing wallet address',
           code: 'INVALID_WALLET_ADDRESS',
         });
       } else {
-        console.warn('⚠️ Invalid wallet address for wallet-less route, continuing without tracking');
         return;
       }
     }
 
     if (!blockchainId) {
       if (!isWalletLessRoute) {
-        console.log(`❌ Missing blockchain ID for regular route`);
         return reply.status(400).send({
           success: false,
           error: 'Missing required field: blockchainId',
           code: 'MISSING_BLOCKCHAIN_ID',
         });
       } else {
-        console.warn('⚠️ Missing blockchain ID for wallet-less route, continuing without tracking');
         return;
       }
     }
-
-    console.log(`✅ Valid wallet info confirmed, proceeding with query tracking`);
 
     // UTC-safe date handling
     const now = new Date();
     const currentMonth = now.getUTCMonth() + 1;
     const currentYear = now.getUTCFullYear();
 
-    console.log(`📅 Current month/year: ${currentMonth}/${currentYear}`);
-
-    // ✅ ENHANCED: Find user supporting both primary and CrossChainIdentity
+    // ✅ Find user supporting both primary and CrossChainIdentity
     const userResult = await findUserByWallet(walletAddress, blockchainId);
 
     if (!userResult) {
-      console.log(`❌ User not found: ${walletAddress}/${blockchainId}`);
       if (isWalletLessRoute) {
-        console.warn('⚠️ User not found for wallet-less route, continuing without tracking');
         return;
       }
       return reply.status(404).send({
@@ -528,14 +486,12 @@ export async function queryLimitHook(
     }
 
     const { user, source: walletSource, crossChainIdentityId } = userResult;
-    console.log(`✅ User found: ${user.id}, planId: ${user.planId}, orgId: ${user.orgId}, walletSource: ${walletSource}`);
 
     // ✅ Resolve effective plan with organization support
     const { effectivePlan, planSource, currentUsers } = await resolveEffectivePlan(user);
 
     if (!effectivePlan) {
       if (isWalletLessRoute) {
-        console.warn('⚠️ No plan found for wallet-less route, continuing without tracking');
         return;
       }
       return reply.status(500).send({
@@ -545,24 +501,17 @@ export async function queryLimitHook(
       });
     }
 
-    console.log(`📊 Effective plan: ${effectivePlan.name} (source: ${planSource}), limit: ${effectivePlan.queryLimit}, users: ${currentUsers}/${effectivePlan.userLimit}`);
-
     // Check trial and plan status
     const trialActive = isTrialActive(user.trialStartDate);
     const planName = effectivePlan.name;
 
-    console.log(`🎯 Plan analysis: plan=${planName}, trialActive=${trialActive}, planSource=${planSource}, walletSource=${walletSource}`);
-
     let usageInfo: any;
     let newUsageCount = 0;
 
-    // ✅ PLAN-SPECIFIC PROCESSING (same as before)
+    // ✅ PLAN-SPECIFIC PROCESSING
     switch (planName) {
       case 'Free':
-        console.log('🆓 Processing Free plan');
-        
         if (!trialActive && !isLenientMode) {
-          console.log(`❌ Trial expired for user ${user.id}`);
           return reply.status(403).send({
             success: false,
             error: 'Free trial expired. Please upgrade your plan.',
@@ -576,10 +525,8 @@ export async function queryLimitHook(
         }
 
         usageInfo = await getFreeUserUsage(user.id);
-        console.log(`📈 Free user usage: ${usageInfo.used}/${usageInfo.limit}`);
         
         if (!usageInfo.canQuery && !isLenientMode) {
-          console.log(`❌ Free trial limit exceeded for user ${user.id}`);
           return reply.status(429).send({
             success: false,
             error: 'Free trial query limit exceeded',
@@ -596,7 +543,6 @@ export async function queryLimitHook(
         }
 
         if (shouldIncrementUsage) {
-          console.log(`📝 Incrementing free user usage for ${user.id}`);
           newUsageCount = await incrementUsage(user.id, currentMonth, currentYear);
         } else {
           newUsageCount = usageInfo.used;
@@ -604,10 +550,7 @@ export async function queryLimitHook(
         break;
 
       case 'Basic':
-        console.log('💼 Processing Basic plan');
-        
         usageInfo = await getBasicUserUsage(user.id, currentMonth, currentYear);
-        console.log(`📈 Basic user usage: ${usageInfo.used}/${usageInfo.limit}`);
 
         if (!usageInfo.canQuery && !isLenientMode) {
           return reply.status(429).send({
@@ -633,10 +576,7 @@ export async function queryLimitHook(
         break;
 
       case 'Pro':
-        console.log('🚀 Processing Pro plan');
-        
         usageInfo = await getPaidPlanUsage(user, 'Pro', currentMonth, currentYear, planSource);
-        console.log(`📈 Pro plan usage: ${usageInfo.used}/${usageInfo.limit} (${planSource})`);
 
         if (!usageInfo.canQuery && !isLenientMode) {
           return reply.status(429).send({
@@ -664,10 +604,7 @@ export async function queryLimitHook(
         break;
 
       case 'Premium':
-        console.log('💎 Processing Premium plan');
-        
         usageInfo = await getPaidPlanUsage(user, 'Premium', currentMonth, currentYear, planSource);
-        console.log(`📈 Premium plan usage: ${usageInfo.used}/${usageInfo.limit} (${planSource})`);
 
         if (!usageInfo.canQuery && !isLenientMode) {
           return reply.status(429).send({
@@ -695,7 +632,6 @@ export async function queryLimitHook(
         break;
 
       default:
-        console.log(`❓ Unknown plan: ${planName}, treating as Basic`);
         usageInfo = await getBasicUserUsage(user.id, currentMonth, currentYear);
         
         if (shouldIncrementUsage) {
@@ -705,7 +641,7 @@ export async function queryLimitHook(
         }
     }
 
-    // ✅ ENHANCED: Attach context with CrossChain info
+    // ✅ Attach context with CrossChain info
     const queryContext: QueryContext = {
       userId: user.id,
       currentUsage: newUsageCount,
@@ -724,26 +660,21 @@ export async function queryLimitHook(
     };
 
     (request as any).queryContext = queryContext;
-    console.log(`✅ ${planName} plan processing complete for ${walletSource} wallet, continuing to route handler`);
     return;
 
   } catch (error) {
-    console.error('❌ Query limit hook error:', error);
-    
     const walletLessRoutes = ['/markPaid', 'markPaid'];
     const isWalletLessRoute = walletLessRoutes.some(route => 
       request.url.includes(route) || request.routerPath?.includes(route)
     );
     
     if (isWalletLessRoute) {
-      console.warn('⚠️ Query limit hook error for wallet-less route, continuing without tracking', error);
       return;
     }
     
     return reply.status(500).send({
       success: false,
       error: 'Internal server error in query limit validation',
-      details: error instanceof Error ? error.message : String(error),
       code: 'INTERNAL_SERVER_ERROR',
     });
   }

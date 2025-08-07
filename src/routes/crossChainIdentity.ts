@@ -1,5 +1,5 @@
-// src/routes/crossChainIdentity.ts - FULLY CORRECTED & PRODUCTION READY
-import { FastifyInstance } from 'fastify';
+// src/routes/crossChainIdentity.ts - PRODUCTION VERSION WITHOUT DEBUG CODE
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { authenticationHook } from '../middleware/authentication.js';
 import { queryLimitHook } from '../middleware/queryLimit.js';
@@ -7,862 +7,1018 @@ import { transactionLimitHook } from '../middleware/transactionLimit.js';
 import { sanitizeObject } from '../utils/sanitization.js';
 import { generateUUID } from '../utils/ubid.js';
 import { supabase } from '../lib/supabaseClient.js';
+import { CreditScoreService } from '../services/creditScore.js';
+import { isTrialActive } from '../utils/isTrialActive.js';
 
 // ✅ Validation Schemas
 const createIdentitySchema = z.object({
-  userId: z.string()
-    .min(1, 'User ID is required')
-    .max(50, 'User ID too long')
-    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid user ID format'),
-  blockchainId: z.string()
-    .min(1, 'Blockchain ID is required')
-    .max(100, 'Blockchain ID too long')
-    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid blockchain ID format'),
-  walletAddress: z.string()
-    .regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid wallet address format'),
+  userId: z.string().min(1).max(50).regex(/^[a-zA-Z0-9_-]+$/),
+  blockchainId: z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/),
+  walletAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
   proofHash: z.string().optional().default(() => generateUUID()),
 });
 
 const userIdSchema = z.object({
-  userId: z.string()
-    .min(1, 'User ID is required')
-    .max(50, 'User ID too long')
-    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid user ID format'),
+  userId: z.string().min(1).max(50).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
-const identityIdSchema = z.object({
-  identityId: z.string()
-    .min(1, 'Identity ID is required')
-    .max(50, 'Identity ID too long')
-    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid identity ID format'),
+const repairSchema = z.object({
+  userId: z.string().min(1).max(50).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
-const removeIdentitySchema = z.object({
-  userId: z.string()
-    .min(1, 'User ID is required')
-    .max(50, 'User ID too long')
-    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid user ID format'),
-});
+interface PlanData {
+  name: string;
+  userLimit: number;
+  queryLimit: number;
+  txnLimit: number | null;
+  canViewOthers: boolean;
+}
 
-// ✅ Error Handler
-const handleDatabaseError = (error: unknown) => {
-  console.error('Database error:', error);
-  if (error && typeof error === 'object' && 'code' in error) {
-    const prismaError = error as { code: string };
-    if (prismaError.code === 'P2002') return { status: 409, message: 'This wallet is already registered for this blockchain' };
-    if (prismaError.code === 'P2025') return { status: 404, message: 'Record not found' };
-    if (prismaError.code === 'P2003') return { status: 400, message: 'Invalid user reference' };
+// ✅ Helper Functions
+const getPlanData = async (planId: string | null): Promise<PlanData> => {
+  if (!planId) {
+    return getDefaultPlanLimits('Free');
   }
-  return { status: 500, message: 'Database operation failed' };
+
+  try {
+    const { data: planData, error: planError } = await supabase
+      .from('Plan')
+      .select('name, "userLimit", "queryLimit", "txnLimit", "canViewOthers"')
+      .eq('id', planId)
+      .maybeSingle();
+
+    if (planError) {
+      return getDefaultPlanLimits('Free');
+    }
+
+    if (!planData) {
+      return getDefaultPlanLimits('Free');
+    }
+    
+    const result: PlanData = {
+      name: planData.name || 'Free',
+      userLimit: planData.userLimit || 1,
+      queryLimit: planData.queryLimit || 100,
+      txnLimit: planData.txnLimit,
+      canViewOthers: planData.canViewOthers || false
+    };
+    
+    return result;
+  } catch (error) {
+    return getDefaultPlanLimits('Free');
+  }
+};
+
+const getDefaultPlanLimits = (planName: string = 'Free'): PlanData => {
+  const limits: Record<string, PlanData> = {
+    'Free': { 
+      name: 'Free',
+      userLimit: 1, 
+      queryLimit: 100, 
+      txnLimit: null, 
+      canViewOthers: false 
+    },
+    'Basic': { 
+      name: 'Basic',
+      userLimit: 3, 
+      queryLimit: 1000, 
+      txnLimit: 1000, 
+      canViewOthers: true 
+    },
+    'Pro': { 
+      name: 'Pro',
+      userLimit: 5, 
+      queryLimit: 15000, 
+      txnLimit: 5000, 
+      canViewOthers: true 
+    },
+    'Premium': { 
+      name: 'Premium',
+      userLimit: 10, 
+      queryLimit: 1000000, 
+      txnLimit: null, 
+      canViewOthers: true 
+    }
+  };
+  
+  return limits[planName] || limits['Free'];
 };
 
 export async function crossChainIdentityRoutes(fastify: FastifyInstance) {
-  // Global error handler
-  fastify.setErrorHandler(async (error, _request, reply) => {
-    console.error('CrossChain Identity route error:', error);
-    if (error.validation) {
-      return reply.status(400).send({
-        success: false,
-        error: 'Validation failed',
-        details: error.validation,
-      });
-    }
-    const status = error.statusCode || 500;
-    const message = error.message || 'Internal server error';
-    return reply.status(status).send({
-      success: false,
-      error: message,
-      timestamp: new Date().toISOString(),
-    });
-  });
-
-  // ✅ POST - Create CrossChain Identity (FULLY PROTECTED)
+  
+  // ✅ POST - Create CrossChain Identity
   fastify.post('/', {
     preHandler: [authenticationHook, transactionLimitHook],
-  }, async (request, reply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const sanitizedBody = sanitizeObject(request.body);
-      const parsed = createIdentitySchema.parse(sanitizedBody);
-
-      console.log(`🆔 Creating CrossChain identity for user ${parsed.userId} on ${parsed.blockchainId}`);
-
-      // 1. Verify user exists and get plan info
+      const parsed = createIdentitySchema.parse(sanitizeObject(request.body));
+      
+      const userId = request.authenticatedUser?.id || parsed.userId;
+      
+      if (!userId) {
+        return reply.status(400).send({ 
+          success: false, 
+          error: 'User ID not available from authentication context',
+          code: 'MISSING_USER_ID'
+        });
+      }
+      
       const { data: existingUser, error: userError } = await supabase
         .from('User')
-        .select(`
-          id, 
-          planId, 
-          walletAddress, 
-          blockchainId,
-          Plan!planId (name, userLimit)
-        `)
-        .eq('id', parsed.userId)
+        .select('id, planId, walletAddress, blockchainId, Plan(name)')
+        .eq('id', userId)
         .maybeSingle();
 
-      if (userError || !existingUser) {
-        return reply.status(404).send({
-          success: false,
+      if (!existingUser) {
+        return reply.status(404).send({ 
+          success: false, 
           error: 'User not found',
-          code: 'USER_NOT_FOUND'
+          code: 'USER_NOT_FOUND',
+          details: `No user found with ID: ${userId}`
         });
       }
 
-      // 2. Get dynamic plan limit (not hardcoded)
-      // Get dynamic plan limit (not hardcoded)
-const planData = existingUser.Plan?.[0];
-const planLimit = planData?.userLimit || 3; // fallback to 3
+      const planData = await getPlanData(existingUser.planId);
+      const planLimits = getDefaultPlanLimits(planData.name);
+      const walletLimit = planData.userLimit || planLimits.userLimit;
 
+      const planDataFromUser: any = existingUser.Plan;
+      let primaryPlan = 'Free';
 
-      // 3. Count ALL user's wallets (primary + crosschain, but unique combinations only)
+      if (planDataFromUser) {
+        if (Array.isArray(planDataFromUser)) {
+          if (planDataFromUser.length > 0 && planDataFromUser[0] && typeof planDataFromUser[0] === 'object' && 'name' in planDataFromUser[0]) {
+            primaryPlan = planDataFromUser[0].name || 'Free';
+          }
+        } else if (typeof planDataFromUser === 'object' && 'name' in planDataFromUser && planDataFromUser.name) {
+          primaryPlan = planDataFromUser.name;
+        }
+      }
+
+      if (primaryPlan === 'Free' && planData.name && planData.name !== 'Free') {
+        primaryPlan = planData.name;
+      }
+
       const { data: existingIdentities } = await supabase
         .from('CrossChainIdentity')
         .select('walletAddress, blockchainId')
-        .eq('userId', parsed.userId);
+        .eq('userId', userId);
 
-      // Create set of unique wallet+chain combinations
-      const walletChainCombos = new Set<string>();
-      
-      // Add primary wallet
-      if (existingUser.walletAddress && existingUser.blockchainId) {
-        walletChainCombos.add(`${existingUser.walletAddress}|${existingUser.blockchainId}`);
-      }
-      
-      // Add all crosschain identities
-      existingIdentities?.forEach(identity => {
-        walletChainCombos.add(`${identity.walletAddress}|${identity.blockchainId}`);
-      });
+      const currentWallets = new Set([
+        `${existingUser.walletAddress}|${existingUser.blockchainId}`,
+        ...(existingIdentities?.map(i => `${i.walletAddress}|${i.blockchainId}`) || [])
+      ]);
 
-      const currentWalletCount = walletChainCombos.size;
+      const walletCount = currentWallets.size;
 
-      // 4. Check plan limits
-      if (currentWalletCount >= planLimit) {
+      if (walletCount >= walletLimit) {
         return reply.status(403).send({
           success: false,
-         error: `Your ${planData?.name || 'current'} plan allows maximum ${planLimit} wallets. Please upgrade to add more.`,
-          code: 'PLAN_LIMIT_EXCEEDED',
-          currentCount: currentWalletCount,
-          limit: planLimit
+          error: `${primaryPlan} plan allows maximum ${walletLimit} wallet(s)`,
+          code: 'WALLET_LIMIT_EXCEEDED',
+          currentCount: walletCount,
+          limit: walletLimit,
+          planName: primaryPlan
         });
       }
 
-      // 5. ✅ CRITICAL: Check if wallet+chain already exists ANYWHERE in system
-      const [existingIdentity, existingPrimaryUser] = await Promise.all([
-        // Check CrossChainIdentity table
-        supabase
-          .from('CrossChainIdentity')
+      const [existingIdentity, existingPrimary] = await Promise.all([
+        supabase.from('CrossChainIdentity')
           .select('id, userId')
           .eq('walletAddress', parsed.walletAddress)
           .eq('blockchainId', parsed.blockchainId)
           .maybeSingle(),
-        
-        // Check User table (primary wallets)
-        supabase
-          .from('User')
-          .select('id, walletAddress')
+        supabase.from('User')
+          .select('id')
           .eq('walletAddress', parsed.walletAddress)
           .eq('blockchainId', parsed.blockchainId)
           .maybeSingle()
       ]);
 
-      if (existingIdentity.data) {
-        if (existingIdentity.data.userId === parsed.userId) {
-          return reply.status(409).send({
-            success: false,
-            error: 'You have already added this wallet to your account',
-            code: 'WALLET_EXISTS_SAME_USER'
-          });
-        } else {
-          return reply.status(409).send({
-            success: false,
-            error: 'This wallet is already registered by another user',
-            code: 'WALLET_EXISTS_OTHER_USER'
-          });
-        }
+      if (existingIdentity.data || existingPrimary.data) {
+        return reply.status(409).send({ 
+          success: false, 
+          error: 'Wallet already registered',
+          code: 'WALLET_ALREADY_REGISTERED',
+          details: {
+            existsAsCrossChain: !!existingIdentity.data,
+            existsAsPrimary: !!existingPrimary.data,
+            existingUserId: existingIdentity.data?.userId || existingPrimary.data?.id
+          }
+        });
       }
 
-      if (existingPrimaryUser.data) {
-        if (existingPrimaryUser.data.id === parsed.userId) {
-          return reply.status(409).send({
-            success: false,
-            error: 'This is your primary wallet. You cannot add it as a cross-chain identity.',
-            code: 'CANNOT_ADD_PRIMARY_WALLET'
-          });
-        } else {
-          return reply.status(409).send({
-            success: false,
-            error: 'This wallet is already used as a primary wallet by another user',
-            code: 'PRIMARY_WALLET_EXISTS'
-          });
-        }
-      }
-
-      // 6. Create the identity
-      const now = new Date().toISOString();
       const identityId = generateUUID();
-      
       const { data: newIdentity, error: createError } = await supabase
         .from('CrossChainIdentity')
         .insert({
           id: identityId,
-          userId: parsed.userId,
+          userId: userId,
           walletAddress: parsed.walletAddress,
           blockchainId: parsed.blockchainId,
           proofHash: parsed.proofHash,
-          createdAt: now,
-          updatedAt: now,
+          planName: primaryPlan,
+          planSource: 'inherited',
+          parentUserId: userId,
+          creditScore: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         })
-        .select(`
-          *,
-          User!userId(id, walletAddress, planId),
-          Blockchain!blockchainId(name, ubid)
-        `)
+        .select('*')
         .single();
 
       if (createError) {
-        console.error('Failed to create CrossChain identity:', createError);
-        const dbError = handleDatabaseError(createError);
-        return reply.status(dbError.status).send({
+        return reply.status(500).send({
           success: false,
-          error: dbError.message,
+          error: 'Failed to create cross-chain identity',
+          code: 'CREATE_FAILED',
           details: createError.message
         });
       }
 
-      console.log('✅ Created CrossChain identity:', newIdentity);
+      let calculatedScore = 0;
+      try {
+        calculatedScore = await CreditScoreService.calculateCrossChainScore(identityId);
+      } catch (scoreError) {
+        // Score calculation failed but continue
+      }
 
       return reply.status(201).send({ 
         success: true, 
-        data: {
-          identity: newIdentity,
-          message: `CrossChain identity created successfully for ${parsed.blockchainId}`,
-          walletLimits: {
-            current: currentWalletCount + 1,
-            maximum: planLimit,
-            remaining: Math.max(0, planLimit - currentWalletCount - 1)
-          }
+        data: { 
+          identity: { 
+            ...newIdentity, 
+            creditScore: calculatedScore 
+          },
+          planInfo: {
+            name: primaryPlan,
+            source: 'inherited',
+            inheritedFrom: userId,
+            walletLimit: walletLimit,
+            currentWallets: walletCount + 1,
+            remainingWallets: walletLimit - walletCount - 1,
+            features: {
+              userLimit: planData.userLimit || planLimits.userLimit,
+              queryLimit: planData.queryLimit || planLimits.queryLimit,
+              txnLimit: planData.txnLimit || planLimits.txnLimit,
+              canViewOthers: planData.canViewOthers ?? planLimits.canViewOthers
+            }
+          },
+          message: `Cross-chain identity created successfully with ${primaryPlan} plan inheritance and score ${calculatedScore}`
         }
       });
 
-    } catch (err: unknown) {
-      console.error('❌ Error creating CrossChain identity:', err);
-
-      if (err instanceof z.ZodError) {
-        return reply.status(400).send({ 
-          success: false,
-          error: 'Validation failed', 
-          details: err.errors 
-        });
-      }
-
-      const dbError = handleDatabaseError(err);
-      return reply.status(dbError.status).send({ 
-        success: false,
-        error: dbError.message,
-        details: err instanceof Error ? err.message : 'Unknown error'
+    } catch (err: any) {
+      return reply.status(400).send({ 
+        success: false, 
+        error: 'Validation failed',
+        code: 'VALIDATION_ERROR',
+        details: err.message
       });
     }
   });
 
-  // ✅ GET - User's identities with enhanced wallet counting
-  fastify.get('/user/:userId', {
-    preHandler: [authenticationHook, queryLimitHook],
-  }, async (request, reply) => {
+  // ✅ PUT - Repair CrossChain Identity
+  fastify.put('/repair/:identityId', {
+    preHandler: [authenticationHook],
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const sanitizedParams = sanitizeObject(request.params);
-      const { userId } = userIdSchema.parse(sanitizedParams);
+      const { identityId } = request.params as any;
+      const parsed = repairSchema.parse(sanitizeObject(request.body));
       
-      console.log(`📋 Fetching CrossChain identities for user ${userId}`);
-
-      // Get user with plan info
-      const { data: existingUser } = await supabase
+      const { data: user } = await supabase
         .from('User')
+        .select('id, planId')
+        .eq('id', parsed.userId)
+        .maybeSingle();
+        
+      if (!user) {
+        return reply.status(404).send({ 
+          success: false, 
+          error: 'User not found',
+          code: 'USER_NOT_FOUND'
+        });
+      }
+      
+      const { data: existingIdentity } = await supabase
+        .from('CrossChainIdentity')
+        .select('id, userId, walletAddress, blockchainId')
+        .eq('id', identityId)
+        .maybeSingle();
+        
+      if (!existingIdentity) {
+        return reply.status(404).send({ 
+          success: false, 
+          error: 'Cross-chain identity not found',
+          code: 'IDENTITY_NOT_FOUND'
+        });
+      }
+      
+      const { data: updatedIdentity, error: updateError } = await supabase
+        .from('CrossChainIdentity')
+        .update({ 
+          userId: parsed.userId,
+          updatedAt: new Date().toISOString()
+        })
+        .eq('id', identityId)
+        .select('*')
+        .single();
+      
+      if (updateError) {
+        return reply.status(500).send({
+          success: false,
+          error: 'Failed to repair cross-chain identity',
+          code: 'REPAIR_FAILED',
+          details: updateError.message
+        });
+      }
+      
+      return reply.send({
+        success: true,
+        message: 'Cross-chain identity repaired successfully',
+        data: {
+          identityId,
+          userId: parsed.userId,
+          walletAddress: existingIdentity.walletAddress,
+          blockchainId: existingIdentity.blockchainId,
+          repaired: true,
+          repairedAt: new Date().toISOString()
+        }
+      });
+    } catch (error: any) {
+      return reply.status(500).send({
+        success: false,
+        error: error.message || 'Failed to repair cross-chain identity',
+        code: 'REPAIR_ERROR'
+      });
+    }
+  });
+
+  // ✅ DELETE - Delete CrossChain Identity
+  fastify.delete('/:identityId', {
+    preHandler: [authenticationHook],
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { identityId } = request.params as any;
+      
+      const { data: existingIdentity } = await supabase
+        .from('CrossChainIdentity')
+        .select('id, userId, walletAddress, blockchainId')
+        .eq('id', identityId)
+        .maybeSingle();
+        
+      if (!existingIdentity) {
+        return reply.status(404).send({ 
+          success: false, 
+          error: 'Cross-chain identity not found',
+          code: 'IDENTITY_NOT_FOUND'
+        });
+      }
+      
+      const { error: deleteError } = await supabase
+        .from('CrossChainIdentity')
+        .delete()
+        .eq('id', identityId);
+
+      if (deleteError) {
+        return reply.status(500).send({
+          success: false,
+          error: 'Failed to delete cross-chain identity',
+          code: 'DELETE_FAILED',
+          details: deleteError.message
+        });
+      }
+      
+      return reply.send({
+        success: true,
+        message: 'Cross-chain identity deleted successfully',
+        data: {
+          identityId,
+          userId: existingIdentity.userId,
+          walletAddress: existingIdentity.walletAddress,
+          blockchainId: existingIdentity.blockchainId,
+          deletedAt: new Date().toISOString()
+        }
+      });
+    } catch (error: any) {
+      return reply.status(500).send({
+        success: false,
+        error: error.message || 'Failed to delete cross-chain identity',
+        code: 'DELETE_ERROR'
+      });
+    }
+  });
+
+  // ✅ GET - Query Usage Endpoint
+  fastify.get('/query/usage/:walletAddress/:blockchainId', {
+    preHandler: [authenticationHook, queryLimitHook],
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { walletAddress, blockchainId } = request.params as any;
+      
+      const { data: primaryUser, error: primaryError } = await supabase
+        .from('User')
+        .select('id, "queriesUsed", "queriesLimit", planId, "queryResetDate"')
+        .eq('walletAddress', walletAddress)
+        .eq('blockchainId', blockchainId)
+        .maybeSingle();
+
+      if (primaryUser) {
+        const planData = await getPlanData(primaryUser.planId);
+        const planLimits = getDefaultPlanLimits(planData.name);
+        
+        const queriesLimit = primaryUser.queriesLimit || planData.queryLimit || planLimits.queryLimit;
+        const queriesUsed = primaryUser.queriesUsed || 0;
+
+        return reply.send({
+          success: true,
+          data: {
+            userId: primaryUser.id,
+            queriesUsed,
+            queriesLimit,
+            queryResetDate: primaryUser.queryResetDate,
+            planName: planData.name,
+            planFeatures: {
+              userLimit: planData.userLimit || planLimits.userLimit,
+              txnLimit: planData.txnLimit || planLimits.txnLimit,
+              canViewOthers: planData.canViewOthers ?? planLimits.canViewOthers
+            },
+            usagePercentage: queriesLimit > 0 ? Math.round((queriesUsed / queriesLimit) * 100) : 0,
+            source: 'primary'
+          }
+        });
+      }
+
+      const { data: crossChain, error: crossChainError } = await supabase
+        .from('CrossChainIdentity')
+        .select('id, userId')
+        .eq('walletAddress', walletAddress)
+        .eq('blockchainId', blockchainId)
+        .maybeSingle();
+
+      if (crossChain && crossChain.userId) {
+        const { data: userData, error: userDataError } = await supabase
+          .from('User')
+          .select('"queriesUsed", "queriesLimit", planId, "queryResetDate"')
+          .eq('id', crossChain.userId)
+          .maybeSingle();
+
+        if (userData) {
+          const planData = await getPlanData(userData.planId);
+          const planLimits = getDefaultPlanLimits(planData.name);
+          
+          const queriesLimit = userData.queriesLimit || planData.queryLimit || planLimits.queryLimit;
+          const queriesUsed = userData.queriesUsed || 0;
+
+          return reply.send({
+            success: true,
+            data: {
+              userId: crossChain.userId,
+              crossChainIdentityId: crossChain.id,
+              queriesUsed,
+              queriesLimit,
+              queryResetDate: userData.queryResetDate,
+              planName: planData.name,
+              planFeatures: {
+                userLimit: planData.userLimit || planLimits.userLimit,
+                txnLimit: planData.txnLimit || planLimits.txnLimit,
+                canViewOthers: planData.canViewOthers ?? planLimits.canViewOthers
+              },
+              usagePercentage: queriesLimit > 0 ? Math.round((queriesUsed / queriesLimit) * 100) : 0,
+              source: 'crosschain',
+              inheritedFrom: 'primary'
+            }
+          });
+        }
+      }
+
+      return reply.status(404).send({ 
+        success: false, 
+        error: 'User not found',
+        code: 'USER_NOT_FOUND',
+        details: 'Wallet not registered as primary or cross-chain identity'
+      });
+    } catch (error: any) {
+      return reply.status(500).send({ 
+        success: false, 
+        error: 'Failed to fetch usage data',
+        code: 'QUERY_USAGE_ERROR',
+        details: error.message
+      });
+    }
+  });
+
+  // ✅ GET - Dynamic Credit Score Endpoint
+  fastify.get('/credit-score/wallet/:walletAddress/:blockchainId', {
+    preHandler: [authenticationHook, queryLimitHook],
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { walletAddress, blockchainId } = request.params as any;
+      
+      const { data: primaryUser, error: primaryError } = await supabase
+        .from('User')
+        .select('id, creditScore, planId, trialStartDate, trialUsed')
+        .eq('walletAddress', walletAddress)
+        .eq('blockchainId', blockchainId)
+        .maybeSingle();
+
+      if (primaryError && primaryError.code !== 'PGRST116') {
+        throw new Error(`Database error: ${primaryError.message}`);
+      }
+
+      if (primaryUser) {
+        const hasActivePlan = !!primaryUser.planId;
+        const hasActiveTrial = isTrialActive(primaryUser.trialStartDate) && !primaryUser.trialUsed;
+
+        if (!hasActivePlan && !hasActiveTrial) {
+          return reply.status(403).send({
+            success: false,
+            error: 'Access denied. Please upgrade your plan or start free trial.',
+            code: 'NO_ACTIVE_PLAN'
+          });
+        }
+
+        const score = await CreditScoreService.calculateScore(primaryUser.id);
+        const planData = await getPlanData(primaryUser.planId);
+        
+        const storedScore = primaryUser.creditScore !== null && primaryUser.creditScore !== undefined ? primaryUser.creditScore : 0;
+        
+        return reply.send({
+          success: true,
+          userId: primaryUser.id,
+          creditScore: score,
+          storedScore: storedScore,
+          planName: planData.name,
+          source: 'primary',
+          walletAddress: walletAddress,
+          blockchainId: blockchainId
+        });
+      }
+
+      const { data: crossChain, error: crossChainError } = await supabase
+        .from('CrossChainIdentity')
         .select(`
           id, 
-          planId, 
-          walletAddress, 
-          blockchainId,
-          Plan!planId (name, userLimit)
+          userId, 
+          creditScore,
+          User!userId(
+            id,
+            planId,
+            trialStartDate,
+            trialUsed
+          )
         `)
+        .eq('walletAddress', walletAddress)
+        .eq('blockchainId', blockchainId)
+        .maybeSingle();
+
+      if (crossChainError && crossChainError.code !== 'PGRST116') {
+        throw new Error(`Database error: ${crossChainError.message}`);
+      }
+
+      if (crossChain && crossChain.User) {
+        const userData = Array.isArray(crossChain.User) ? crossChain.User[0] : crossChain.User;
+        
+        const hasActivePlan = !!userData.planId;
+        const hasActiveTrial = isTrialActive(userData.trialStartDate) && !userData.trialUsed;
+
+        if (!hasActivePlan && !hasActiveTrial) {
+          return reply.status(403).send({
+            success: false,
+            error: 'Access denied. Please upgrade your plan or start free trial.',
+            code: 'NO_ACTIVE_PLAN'
+          });
+        }
+
+        const score = await CreditScoreService.calculateCrossChainScore(crossChain.id);
+        
+        let planName = 'Free';
+        if (userData.planId) {
+          const planData = await getPlanData(userData.planId);
+          planName = planData.name;
+        }
+        
+        const storedScore = crossChain.creditScore !== null && crossChain.creditScore !== undefined ? crossChain.creditScore : 0;
+        
+        return reply.send({
+          success: true,
+          userId: crossChain.userId,
+          crossChainIdentityId: crossChain.id,
+          creditScore: score,
+          storedScore: storedScore,
+          planName: planName,
+          source: 'crosschain',
+          walletAddress: walletAddress,
+          blockchainId: blockchainId
+        });
+      }
+
+      return reply.status(404).send({ 
+        success: false, 
+        error: 'Wallet not found',
+        code: 'WALLET_NOT_FOUND'
+      });
+    } catch (error: any) {
+      return reply.status(500).send({ 
+        success: false, 
+        error: 'Failed to fetch credit score',
+        code: 'CREDIT_SCORE_ERROR',
+        details: error.message
+      });
+    }
+  });
+
+  // ✅ GET - Test Score Endpoint
+  fastify.get('/test-score/:identityId', {}, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { identityId } = request.params as any;
+      
+      const { data: identity } = await supabase
+        .from('CrossChainIdentity')
+        .select('id, userId, creditScore, walletAddress, blockchainId, createdAt')
+        .eq('id', identityId)
+        .maybeSingle();
+      
+      if (!identity) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Cross-chain identity not found',
+          code: 'IDENTITY_NOT_FOUND'
+        });
+      }
+      
+      const calculatedScore = await CreditScoreService.calculateCrossChainScore(identityId);
+      
+      let userInfo = null;
+      let planInfo = null;
+      if (identity.userId) {
+        const { data: user } = await supabase
+          .from('User')
+          .select('id, walletAddress, blockchainId, planId')
+          .eq('id', identity.userId)
+          .maybeSingle();
+        
+        if (user) {
+          const planData = await getPlanData(user.planId);
+          const planLimits = getDefaultPlanLimits(planData.name);
+          
+          userInfo = { ...user };
+          planInfo = {
+            name: planData.name,
+            features: {
+              userLimit: planData.userLimit || planLimits.userLimit,
+              queryLimit: planData.queryLimit || planLimits.queryLimit,
+              txnLimit: planData.txnLimit || planLimits.txnLimit,
+              canViewOthers: planData.canViewOthers ?? planLimits.canViewOthers
+            }
+          };
+        }
+      }
+      
+      return reply.send({
+        success: true,
+        identityId,
+        calculatedScore,
+        storedScore: identity.creditScore,
+        walletAddress: identity.walletAddress,
+        blockchainId: identity.blockchainId,
+        userId: identity.userId,
+        hasUserId: !!identity.userId,
+        userInfo,
+        planInfo,
+        createdAt: identity.createdAt,
+        message: 'Score calculation test completed'
+      });
+    } catch (error: any) {
+      return reply.status(500).send({
+        success: false,
+        error: error.message,
+        code: 'TEST_SCORE_ERROR'
+      });
+    }
+  });
+
+  // ✅ GET - User's identities with plan info
+  fastify.get('/user/:userId', {
+    preHandler: [authenticationHook, queryLimitHook],
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { userId } = userIdSchema.parse(sanitizeObject(request.params));
+      
+      const { data: existingUser } = await supabase
+        .from('User')
+        .select('id, planId, walletAddress, blockchainId')
         .eq('id', userId)
         .maybeSingle();
 
       if (!existingUser) {
-        return reply.status(404).send({
-          success: false,
+        return reply.status(404).send({ 
+          success: false, 
           error: 'User not found',
           code: 'USER_NOT_FOUND'
         });
       }
 
-      // Get all cross-chain identities
-      const { data: identities, error } = await supabase
+      const planData = await getPlanData(existingUser.planId);
+      const planLimits = getDefaultPlanLimits(planData.name);
+
+      const { data: identities } = await supabase
         .from('CrossChainIdentity')
-        .select(`
-          *,
-          User!userId(id, walletAddress, planId),
-          Blockchain!blockchainId(name, ubid)
-        `)
+        .select('*')
         .eq('userId', userId)
         .order('createdAt', { ascending: false });
 
-      if (error) {
-        console.error('Error fetching identities:', error);
-        return reply.status(500).send({
-          success: false,
-          error: 'Failed to fetch CrossChain identities'
-        });
-      }
-
-      // Calculate unique wallet count
-      const walletChainCombos = new Set<string>();
-      
-      // Add primary wallet
-      if (existingUser.walletAddress && existingUser.blockchainId) {
-        walletChainCombos.add(`${existingUser.walletAddress}|${existingUser.blockchainId}`);
-      }
-      
-      // Add cross-chain identities
-      identities?.forEach(identity => {
-        walletChainCombos.add(`${identity.walletAddress}|${identity.blockchainId}`);
-      });
-
-      const identitiesWithStats = identities?.map(identity => ({
-        ...identity,
-        isPrimary: existingUser.walletAddress === identity.walletAddress && 
-                   existingUser.blockchainId === identity.blockchainId,
-        createdAtFormatted: new Date(identity.createdAt).toLocaleString(),
-      })) || [];
-
-      const planData = existingUser.Plan?.[0];
-const planLimit = planData?.userLimit || 3;
-      const currentWalletCount = walletChainCombos.size;
+      const totalWallets = 1 + (identities?.length || 0);
+      const walletLimit = planData.userLimit || planLimits.userLimit;
 
       return reply.send({ 
         success: true, 
-        data: {
-          identities: identitiesWithStats,
-          count: identitiesWithStats.length,
-          planLimits: {
-            current: currentWalletCount,
-            maximum: planLimit,
-            canAddMore: currentWalletCount < planLimit,
-            planName: planData?.name || 'Unknown'
+        data: { 
+          identities: identities || [],
+          count: identities?.length || 0,
+          user: {
+            id: existingUser.id,
+            primaryWallet: {
+              address: existingUser.walletAddress,
+              blockchainId: existingUser.blockchainId
+            }
           },
-          primaryWallet: {
-            walletAddress: existingUser.walletAddress,
-            blockchainId: existingUser.blockchainId
+          planInfo: {
+            name: planData.name,
+            limits: {
+              userLimit: walletLimit,
+              queryLimit: planData.queryLimit || planLimits.queryLimit,
+              txnLimit: planData.txnLimit || planLimits.txnLimit,
+              canViewOthers: planData.canViewOthers ?? planLimits.canViewOthers
+            },
+            usage: {
+              walletsUsed: totalWallets,
+              walletsRemaining: Math.max(0, walletLimit - totalWallets),
+              canAddMore: totalWallets < walletLimit
+            }
           }
         }
       });
+    } catch (err: any) {
+      return reply.status(400).send({ 
+        success: false, 
+        error: 'Invalid user ID',
+        code: 'INVALID_USER_ID'
+      });
+    }
+  });
 
-    } catch (err: unknown) {
-      console.error('❌ Error fetching user identities:', err);
+  // ✅ GET - Verify wallet
+  fastify.get('/verify/:walletAddress/:blockchainId', {
+    preHandler: [],
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { walletAddress, blockchainId } = request.params as any;
+      
+      const [crossChainResult, primaryResult] = await Promise.all([
+        supabase.from('CrossChainIdentity')
+          .select('*')
+          .eq('walletAddress', walletAddress)
+          .eq('blockchainId', blockchainId)
+          .maybeSingle(),
+        supabase.from('User')
+          .select('*')
+          .eq('walletAddress', walletAddress)
+          .eq('blockchainId', blockchainId)
+          .maybeSingle()
+      ]);
 
-      if (err instanceof z.ZodError) {
-        return reply.status(400).send({ 
-          success: false,
-          error: 'Invalid user ID format', 
-          details: err.errors 
-        });
+      let creditScore = 0;
+      let source = null;
+      let isRegistered = false;
+      let userId = null;
+      let crossChainIdentityId = null;
+      let planInfo = null;
+
+      if (primaryResult.data) {
+        isRegistered = true;
+        source = 'primary';
+        userId = primaryResult.data.id;
+        
+        try {
+          creditScore = await CreditScoreService.calculateScore(primaryResult.data.id);
+        } catch (err) {
+          // Score calculation failed
+        }
+        
+        const planData = await getPlanData(primaryResult.data.planId);
+        
+        planInfo = {
+          name: planData.name,
+          features: {
+            userLimit: planData.userLimit,
+            queryLimit: planData.queryLimit,
+            txnLimit: planData.txnLimit,
+            canViewOthers: planData.canViewOthers
+          }
+        };
+      } else if (crossChainResult.data) {
+        isRegistered = true;
+        source = 'crosschain';
+        userId = crossChainResult.data.userId;
+        crossChainIdentityId = crossChainResult.data.id;
+        
+        try {
+          creditScore = await CreditScoreService.calculateCrossChainScore(crossChainResult.data.id);
+        } catch (err) {
+          // Score calculation failed
+        }
+        
+        if (userId) {
+          const { data: parentUser, error: parentError } = await supabase
+            .from('User')
+            .select('planId')
+            .eq('id', userId)
+            .maybeSingle();
+          
+          if (parentUser) {
+            const planData = await getPlanData(parentUser.planId);
+            
+            planInfo = {
+              name: planData.name,
+              inherited: true,
+              features: {
+                userLimit: planData.userLimit,
+                queryLimit: planData.queryLimit,
+                txnLimit: planData.txnLimit,
+                canViewOthers: planData.canViewOthers
+              }
+            };
+          } else {
+            planInfo = {
+              name: 'Free',
+              inherited: true,
+              features: getDefaultPlanLimits('Free')
+            };
+          }
+        }
       }
 
+      const response = { 
+        success: true, 
+        data: { 
+          isRegistered, 
+          source, 
+          creditScore, 
+          walletAddress, 
+          blockchainId,
+          userId,
+          crossChainIdentityId,
+          hasUserId: !!userId,
+          planInfo,
+          timestamp: new Date().toISOString()
+        }
+      };
+      
+      return reply.send(response);
+    } catch (error: any) {
       return reply.status(500).send({ 
         success: false, 
-        error: err instanceof Error ? err.message : 'Unknown error' 
+        error: 'Verification failed',
+        code: 'VERIFICATION_ERROR',
+        details: error.message
       });
     }
   });
 
-  // // ✅ GET - Identity by wallet address (checks both tables)
-  // fastify.get('/wallet/:walletAddress', {
-  //   preHandler: [authenticationHook, queryLimitHook],
-  // }, async (request, reply) => {
-  //   try {
-  //     const walletSchema = z.object({
-  //       walletAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid wallet address format')
-  //     });
-
-  //     const sanitizedParams = sanitizeObject(request.params);
-  //     const { walletAddress } = walletSchema.parse(sanitizedParams);
-      
-  //     console.log(`🔍 Searching identities for wallet ${walletAddress}`);
-
-  //     // Check both CrossChainIdentity and User tables
-  //     const [crossChainIdentities, primaryUsers] = await Promise.all([
-  //       supabase
-  //         .from('CrossChainIdentity')
-  //         .select(`
-  //           *,
-  //           User!userId(id, walletAddress, planId, blockchainId),
-  //           Blockchain!blockchainId(name, ubid)
-  //         `)
-  //         .eq('walletAddress', walletAddress)
-  //         .order('createdAt', { ascending: false }),
-        
-  //       supabase
-  //         .from('User')
-  //         .select(`
-  //           id,
-  //           walletAddress,
-  //           blockchainId,
-  //           planId,
-  //           createdAt,
-  //           Plan!planId(name, userLimit)
-  //         `)
-  //         .eq('walletAddress', walletAddress)
-  //         .order('createdAt', { ascending: false })
-  //     ]);
-
-  //     if (crossChainIdentities.error || primaryUsers.error) {
-  //       console.error('Error fetching wallet identities:', crossChainIdentities.error || primaryUsers.error);
-  //       return reply.status(500).send({
-  //         success: false,
-  //         error: 'Failed to fetch wallet identities'
-  //       });
-  //     }
-
-  //     const crossChainWithDetails = crossChainIdentities.data?.map(identity => ({
-  //       ...identity,
-  //       type: 'crosschain' as const,
-  //       isPrimary: false,
-  //     })) || [];
-
-  //     const primaryWithDetails = primaryUsers.data?.map(user => ({
-  //       id: user.id,
-  //       walletAddress: user.walletAddress,
-  //       blockchainId: user.blockchainId,
-  //       userId: user.id,
-  //       type: 'primary' as const,
-  //       isPrimary: true,
-  //       createdAt: user.createdAt,
-  //       User: user,
-  //       Plan: user.Plan
-  //     })) || [];
-
-  //     const allIdentities = [...primaryWithDetails, ...crossChainWithDetails];
-
-  //     return reply.send({ 
-  //       success: true, 
-  //       data: {
-  //         identities: allIdentities,
-  //         count: allIdentities.length,
-  //         walletAddress,
-  //         supportedChains: [...new Set(allIdentities.map(id => id.blockchainId))],
-  //         breakdown: {
-  //           primary: primaryWithDetails.length,
-  //           crosschain: crossChainWithDetails.length
-  //         }
-  //       }
-  //     });
-
-  //   } catch (err: unknown) {
-  //     console.error('❌ Error fetching wallet identities:', err);
-
-  //     if (err instanceof z.ZodError) {
-  //       return reply.status(400).send({ 
-  //         success: false,
-  //         error: 'Invalid wallet address format', 
-  //         details: err.errors 
-  //       });
-  //     }
-
-  //     return reply.status(500).send({ 
-  //       success: false, 
-  //       error: err instanceof Error ? err.message : 'Unknown error' 
-  //     });
-  //   }
-  // });
-
-  // Add this to your crossChainIdentity routes for debugging
-// ✅ FIXED: Debug endpoint without authentication
-fastify.get('/debug/:walletAddress/:blockchainId', {
-  // Remove preHandler for debugging purposes
-}, async (request, reply) => {
-  try {
-    const { walletAddress, blockchainId } = request.params as any;
-    
-    console.log(`🔍 DEBUG: Checking wallet ${walletAddress} on chain ${blockchainId}`);
-    
-    // Check both tables
-    const [crossChainData, primaryData] = await Promise.all([
-      supabase
-        .from('CrossChainIdentity')
-        .select('*')
-        .eq('walletAddress', walletAddress)
-        .eq('blockchainId', blockchainId),
-      
-      supabase
-        .from('User')
-        .select('*')
-        .eq('walletAddress', walletAddress)
-        .eq('blockchainId', blockchainId)
-    ]);
-    
-    return reply.send({
-      success: true,
-      debug: {
-        walletAddress,
-        blockchainId,
-        crossChainResults: crossChainData,
-        primaryResults: primaryData,
-        crossChainCount: crossChainData.data?.length || 0,
-        primaryCount: primaryData.data?.length || 0,
-        timestamp: new Date().toISOString()
-      }
-    });
-    
-  } catch (error) {
-    console.error('Debug endpoint error:', error);
-    return reply.status(500).send({
-      success: false,
-      error: error instanceof Error ? error.message : 'Debug failed'
-    });
-  }
-});
-
-
-
-  // ✅ DELETE - Remove identity (with safety checks)
-  fastify.delete('/:identityId', {
+  // ✅ POST - Initialize credit score
+  fastify.post('/:identityId/init-credit-score', {
     preHandler: [authenticationHook, transactionLimitHook],
-  }, async (request, reply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const sanitizedParams = sanitizeObject(request.params);
-      const sanitizedBody = sanitizeObject(request.body);
-      const { identityId } = identityIdSchema.parse(sanitizedParams);
-      const { userId } = removeIdentitySchema.parse(sanitizedBody);
+      const { identityId } = request.params as any;
+      const { userId } = request.body as any;
 
-      console.log(`🗑️ Removing CrossChain identity ${identityId} for user ${userId}`);
-
-      // Verify ownership
-      const { data: existingIdentity, error: fetchError } = await supabase
+      const { data: identity } = await supabase
         .from('CrossChainIdentity')
-        .select(`
-          *,
-          User!userId(id, walletAddress, planId)
-        `)
+        .select('*')
         .eq('id', identityId)
         .eq('userId', userId)
         .maybeSingle();
 
-      if (fetchError || !existingIdentity) {
-        return reply.status(404).send({
-          success: false,
-          error: 'CrossChain identity not found or access denied',
+      if (!identity) {
+        return reply.status(404).send({ 
+          success: false, 
+          error: 'Identity not found or access denied',
           code: 'IDENTITY_NOT_FOUND'
         });
       }
 
-      // Check for related transactions
-      const { data: relatedTransactions } = await supabase
-        .from('CrossChainTransaction')
-        .select('id')
-        .or(`fromAddress.eq.${existingIdentity.walletAddress},toAddress.eq.${existingIdentity.walletAddress}`)
-        .limit(1);
+      const calculatedScore = await CreditScoreService.calculateCrossChainScore(identityId);
 
-      if (relatedTransactions && relatedTransactions.length > 0) {
-        return reply.status(400).send({
-          success: false,
-          error: 'Cannot remove identity with existing transactions. Please contact support.',
-          code: 'IDENTITY_HAS_TRANSACTIONS'
-        });
-      }
-
-      // Remove the identity
-      const { error: deleteError } = await supabase
+      await supabase
         .from('CrossChainIdentity')
-        .delete()
-        .eq('id', identityId)
-        .eq('userId', userId);
-
-      if (deleteError) {
-        console.error('Failed to delete CrossChain identity:', deleteError);
-        const dbError = handleDatabaseError(deleteError);
-        return reply.status(dbError.status).send({
-          success: false,
-          error: dbError.message,
-          details: deleteError.message
-        });
-      }
-
-      console.log('✅ Removed CrossChain identity:', identityId);
-
-      return reply.send({
-        success: true,
-        message: 'CrossChain identity removed successfully',
-        data: {
-          removedIdentity: {
-            id: identityId,
-            walletAddress: existingIdentity.walletAddress,
-            blockchainId: existingIdentity.blockchainId
-          }
-        }
-      });
-
-    } catch (err: unknown) {
-      console.error('❌ Error removing CrossChain identity:', err);
-
-      if (err instanceof z.ZodError) {
-        return reply.status(400).send({ 
-          success: false,
-          error: 'Validation failed', 
-          details: err.errors 
-        });
-      }
-
-      const dbError = handleDatabaseError(err);
-      return reply.status(dbError.status).send({ 
-        success: false,
-        error: dbError.message,
-        details: err instanceof Error ? err.message : 'Unknown error'
-      });
-    }
-  });
-
-  // ✅ PUT - Update proof hash
-  fastify.put('/:identityId', {
-    preHandler: [authenticationHook, transactionLimitHook],
-  }, async (request, reply) => {
-    try {
-      const updateSchema = z.object({
-        userId: z.string()
-          .min(1, 'User ID is required')
-          .max(50, 'User ID too long')
-          .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid user ID format'),
-        proofHash: z.string()
-          .min(1, 'Proof hash is required')
-          .max(200, 'Proof hash too long'),
-      });
-
-      const sanitizedParams = sanitizeObject(request.params);
-      const sanitizedBody = sanitizeObject(request.body);
-      const { identityId } = identityIdSchema.parse(sanitizedParams);
-      const { userId, proofHash } = updateSchema.parse(sanitizedBody);
-
-      console.log(`🔄 Updating CrossChain identity ${identityId} for user ${userId}`);
-
-      // Verify ownership
-      const { data: existingIdentity } = await supabase
-        .from('CrossChainIdentity')
-        .select('id, userId, walletAddress, blockchainId')
-        .eq('id', identityId)
-        .eq('userId', userId)
-        .maybeSingle();
-
-      if (!existingIdentity) {
-        return reply.status(404).send({
-          success: false,
-          error: 'CrossChain identity not found or access denied',
-          code: 'IDENTITY_NOT_FOUND'
-        });
-      }
-
-      // Update proof hash
-      const { data: updatedIdentity, error: updateError } = await supabase
-        .from('CrossChainIdentity')
-        .update({
-          proofHash: proofHash,
-          updatedAt: new Date().toISOString(),
+        .update({ 
+          creditScore: calculatedScore,
+          updatedAt: new Date().toISOString()
         })
-        .eq('id', identityId)
-        .eq('userId', userId)
-        .select()
-        .single();
-
-      if (updateError) {
-        console.error('Failed to update CrossChain identity:', updateError);
-        const dbError = handleDatabaseError(updateError);
-        return reply.status(dbError.status).send({
-          success: false,
-          error: dbError.message,
-          details: updateError.message
-        });
-      }
-
-      console.log('✅ Updated CrossChain identity:', updatedIdentity);
+        .eq('id', identityId);
 
       return reply.send({
         success: true,
-        message: 'CrossChain identity updated successfully',
-        data: {
-          identity: updatedIdentity
+        data: { 
+          identityId, 
+          creditScore: calculatedScore, 
+          calculated: true,
+          updatedAt: new Date().toISOString()
         }
       });
-
-    } catch (err: unknown) {
-      console.error('❌ Error updating CrossChain identity:', err);
-
-      if (err instanceof z.ZodError) {
-        return reply.status(400).send({ 
-          success: false,
-          error: 'Validation failed', 
-          details: err.errors 
-        });
-      }
-
-      const dbError = handleDatabaseError(err);
-      return reply.status(dbError.status).send({ 
-        success: false,
-        error: dbError.message,
-        details: err instanceof Error ? err.message : 'Unknown error'
+    } catch (error: any) {
+      return reply.status(500).send({ 
+        success: false, 
+        error: 'Failed to calculate credit score',
+        code: 'SCORE_INIT_ERROR'
       });
     }
   });
 
- // ✅ ADD: Enhanced wallet verification with credit score initialization
-fastify.get('/verify/:walletAddress/:blockchainId', {
-  preHandler: [authenticationHook, queryLimitHook],
-}, async (request, reply) => {
-  try {
-    const verifySchema = z.object({
-      walletAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid wallet address format'),
-      blockchainId: z.string()
-        .min(1, 'Blockchain ID is required')
-        .max(100, 'Blockchain ID too long')
-        .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid blockchain ID format'),
-    });
+  // ✅ GET - Health check endpoint
+  fastify.get('/health', {}, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const [identityResult, userResult, planResult] = await Promise.all([
+        supabase.from('CrossChainIdentity').select('id', { count: 'exact' }),
+        supabase.from('User').select('id', { count: 'exact' }),
+        supabase.from('Plan').select('name', { count: 'exact' })
+      ]);
 
-    const sanitizedParams = sanitizeObject(request.params);
-    const { walletAddress, blockchainId } = verifySchema.parse(sanitizedParams);
-    
-    console.log(`✅ Verifying identity for ${walletAddress} on ${blockchainId}`);
+      let planDistribution = {};
+      try {
+        const { data: planStats } = await supabase
+          .from('User')
+          .select('planId, Plan(name)')
+          .not('planId', 'is', null);
+        
+        if (planStats) {
+          planDistribution = planStats.reduce((acc: any, user: any) => {
+            const planName = user.Plan?.name || 'Unknown';
+            acc[planName] = (acc[planName] || 0) + 1;
+            return acc;
+          }, {});
+        }
+      } catch (err) {
+        // Plan distribution fetch failed
+      }
 
-    // Check both CrossChainIdentity and User tables
-    const [crossChainIdentity, primaryUser] = await Promise.all([
-      supabase
-        .from('CrossChainIdentity')
-        .select(`
-          *,
-          User!userId(id, walletAddress, planId, blockchainId)
-        `)
-        .eq('walletAddress', walletAddress)
-        .eq('blockchainId', blockchainId)
-        .maybeSingle(),
-      
-      supabase
-        .from('User')
-        .select(`
-          id,
-          walletAddress,
-          blockchainId,
-          planId,
-          creditScore,
-          Plan!planId(name, userLimit)
-        `)
-        .eq('walletAddress', walletAddress)
-        .eq('blockchainId', blockchainId)
-        .maybeSingle()
-    ]);
-
-    if (crossChainIdentity.error || primaryUser.error) {
-      console.error('Error verifying identity:', crossChainIdentity.error || primaryUser.error);
+      return reply.send({
+        success: true,
+        data: {
+          crossChainIdentities: identityResult.data?.length || 0,
+          users: userResult.data?.length || 0,
+          plans: planResult.data?.length || 0,
+          planDistribution,
+          timestamp: new Date().toISOString(),
+          version: '1.0.0'
+        }
+      });
+    } catch (error: any) {
       return reply.status(500).send({
         success: false,
-        error: 'Failed to verify identity'
+        error: error.message,
+        code: 'HEALTH_CHECK_ERROR'
       });
     }
+  });
 
-    let isRegistered = false;
-    let source: 'primary' | 'crosschain' | null = null;
-    let identity: any = null;
-    let creditScore = 0;
-
-    if (primaryUser.data) {
-      isRegistered = true;
-      source = 'primary';
-      identity = primaryUser.data;
-      creditScore = primaryUser.data.creditScore || 0;
-    } else if (crossChainIdentity.data) {
-      isRegistered = true;
-      source = 'crosschain';
-      identity = crossChainIdentity.data;
-      creditScore = crossChainIdentity.data.creditScore || 0; // ✅ Include CrossChain credit score
-    }
-
-    return reply.send({ 
-      success: true, 
-      data: {
-        isRegistered,
-        source,
-        identity,
-        creditScore, // ✅ Include credit score in verification
-        walletAddress,
-        blockchainId,
-        canCreateInvoices: isRegistered,
-        message: isRegistered 
-          ? `Wallet is registered as ${source} wallet with credit score ${creditScore}` 
-          : 'Wallet is not registered for this blockchain'
+  // ✅ GET - Plan limits endpoint
+  fastify.get('/plan-limits/:planName?', {}, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { planName } = request.params as any;
+      
+      if (planName) {
+        const limits = getDefaultPlanLimits(planName);
+        
+        return reply.send({
+          success: true,
+          data: {
+            planName,
+            limits
+          }
+        });
+      } else {
+        const allPlans = ['Free', 'Basic', 'Pro', 'Premium'];
+        const planLimits = allPlans.reduce((acc, plan) => {
+          acc[plan] = getDefaultPlanLimits(plan);
+          return acc;
+        }, {} as any);
+        
+        return reply.send({
+          success: true,
+          data: {
+            plans: planLimits
+          }
+        });
       }
-    });
-
-  } catch (err: unknown) {
-    console.error('❌ Error verifying identity:', err);
-
-    if (err instanceof z.ZodError) {
-      return reply.status(400).send({ 
+    } catch (error: any) {
+      return reply.status(500).send({
         success: false,
-        error: 'Invalid parameters', 
-        details: err.errors 
+        error: error.message,
+        code: 'PLAN_LIMITS_ERROR'
       });
     }
-
-    return reply.status(500).send({ 
-      success: false, 
-      error: err instanceof Error ? err.message : 'Unknown error' 
-    });
-  }
-});
-
-// ✅ NEW: Initialize credit score for CrossChainIdentity
-fastify.post('/:identityId/init-credit-score', {
-  preHandler: [authenticationHook, transactionLimitHook],
-}, async (request, reply) => {
-  try {
-    const { identityId } = request.params as any;
-    const { userId } = request.body as any;
-
-    // Verify ownership
-    const { data: identity } = await supabase
-      .from('CrossChainIdentity')
-      .select('*')
-      .eq('id', identityId)
-      .eq('userId', userId)
-      .maybeSingle();
-
-    if (!identity) {
-      return reply.status(404).send({
-        success: false,
-        error: 'CrossChain identity not found or access denied'
-      });
-    }
-
-    // Initialize credit score (default 500)
-    const { data: updatedIdentity, error } = await supabase
-      .from('CrossChainIdentity')
-      .update({
-        creditScore: 500,
-        updatedAt: new Date().toISOString()
-      })
-      .eq('id', identityId)
-      .select()
-      .single();
-
-    if (error) {
-      throw error;
-    }
-
-    return reply.send({
-      success: true,
-      message: 'Credit score initialized successfully',
-      data: updatedIdentity
-    });
-
-  } catch (error) {
-    console.error('Error initializing credit score:', error);
-    return reply.status(500).send({
-      success: false,
-      error: 'Failed to initialize credit score'
-    });
-  }
-});
+  });
 }

@@ -1,4 +1,4 @@
-// src/utils/checkUserPlanLimits.ts - CORRECTED VERSION WITH CROSSCHAIN SUPPORT
+// src/utils/checkUserPlanLimits.ts
 import { supabase } from '../lib/supabaseClient.js';
 import { isTrialActive } from './isTrialActive.js';
 
@@ -26,13 +26,11 @@ export interface WalletInfo {
 }
 
 /**
- * ✅ ENHANCED: Get all wallets for a user (primary + cross-chain) with CrossChain support
+ * Get all wallets for a user (primary + cross-chain) with CrossChain support
  */
 async function getAllUserWallets(userId: string) {
   try {
-    console.log(`🔍 Getting all wallets for user: ${userId}`);
-
-    // ✅ FIXED: Get primary wallet from User table
+    // Get primary wallet from User table
     const { data: primaryUser, error: primaryError } = await supabase
       .from('User')
       .select(`
@@ -47,10 +45,10 @@ async function getAllUserWallets(userId: string) {
       .maybeSingle();
 
     if (primaryError) {
-      console.error('Error fetching primary user:', primaryError);
+      // Handle error silently in production
     }
 
-    // ✅ FIXED: Get cross-chain identities with blockchain info
+    // Get cross-chain identities with blockchain info
     const { data: crossChainWallets, error: crossChainError } = await supabase
       .from('CrossChainIdentity')
       .select(`
@@ -64,7 +62,7 @@ async function getAllUserWallets(userId: string) {
       .eq('userId', userId);
 
     if (crossChainError) {
-      console.error('Error fetching cross-chain wallets:', crossChainError);
+      // Handle error silently in production
     }
 
     const allWallets = [];
@@ -84,8 +82,6 @@ async function getAllUserWallets(userId: string) {
         createdAt: primaryUser.createdAt,
         source: 'primary' as const,
       });
-      
-      console.log(`✅ Added primary wallet: ${primaryUser.walletAddress}`);
     }
 
     // Add cross-chain wallets
@@ -105,21 +101,17 @@ async function getAllUserWallets(userId: string) {
           source: 'crosschain' as const,
         });
       }
-      
-      console.log(`✅ Added ${crossChainWallets.length} cross-chain wallets`);
     }
 
-    console.log(`📊 Total wallets found: ${allWallets.length}`);
     return allWallets;
     
   } catch (error) {
-    console.error('Error fetching user wallets:', error);
     return [];
   }
 }
 
 /**
- * ✅ ENHANCED: Get credit score for a specific wallet (supports CrossChain)
+ * Get credit score for a specific wallet (supports CrossChain)
  */
 async function getCreditScoreForWallet(walletAddress: string, blockchainId: string): Promise<number> {
   try {
@@ -135,7 +127,7 @@ async function getCreditScoreForWallet(walletAddress: string, blockchainId: stri
       return user.creditScore || 0;
     }
 
-    // ✅ ENHANCED: Check CrossChainIdentity for credit score
+    // Check CrossChainIdentity for credit score
     const { data: crossChainWallet } = await supabase
       .from('CrossChainIdentity')
       .select('creditScore')
@@ -149,7 +141,6 @@ async function getCreditScoreForWallet(walletAddress: string, blockchainId: stri
 
     return 0;
   } catch (error) {
-    console.error('Error fetching credit score:', error);
     return 0;
   }
 }
@@ -205,16 +196,14 @@ function applyWalletCountingLogic(wallets: any[]): WalletInfo[] {
 }
 
 /**
- * ✅ ENHANCED: Main function supporting both User ID and CrossChainIdentity ID
+ * Main function supporting both User ID and CrossChainIdentity ID
  */
 export async function checkUserPlanLimits(identifier: string): Promise<PlanInfo> {
   try {
-    console.log(`🔍 Checking plan limits for identifier: ${identifier}`);
-    
     let userId: string;
     let user: any = null;
     
-    // ✅ NEW: Check if identifier is a CrossChainIdentity ID first
+    // Check if identifier is a CrossChainIdentity ID first
     const { data: crossChainIdentity, error: crossChainError } = await supabase
       .from('CrossChainIdentity')
       .select(`
@@ -231,7 +220,7 @@ export async function checkUserPlanLimits(identifier: string): Promise<PlanInfo>
       .maybeSingle();
 
     if (crossChainError && crossChainError.code !== 'PGRST116') {
-      console.error('Error checking CrossChainIdentity:', crossChainError);
+      // Handle error silently in production
     }
 
     if (crossChainIdentity && crossChainIdentity.User) {
@@ -239,7 +228,6 @@ export async function checkUserPlanLimits(identifier: string): Promise<PlanInfo>
       const userData = Array.isArray(crossChainIdentity.User) ? crossChainIdentity.User[0] : crossChainIdentity.User;
       userId = userData.id;
       user = userData;
-      console.log(`✅ Found user via CrossChainIdentity: ${userId}`);
     } else {
       // Assume it's a User ID
       const { data: directUser, error: userError } = await supabase
@@ -254,16 +242,13 @@ export async function checkUserPlanLimits(identifier: string): Promise<PlanInfo>
         .maybeSingle();
 
       if (userError) {
-        console.error('Error checking User:', userError);
         throw new Error(`Database error: ${userError.message}`);
       }
 
       if (directUser) {
         userId = directUser.id;
         user = directUser;
-        console.log(`✅ Found direct user: ${userId}`);
       } else {
-        console.log(`❌ No user found for identifier: ${identifier}`);
         throw new Error('User not found');
       }
     }
@@ -281,13 +266,11 @@ export async function checkUserPlanLimits(identifier: string): Promise<PlanInfo>
 
     const trialActive = isTrialActive(user.trialStartDate);
 
-    // ✅ ENHANCED: Determine plan defaults with better fallbacks
+    // Determine plan defaults with better fallbacks
     const planName = plan?.name || 'Free';
-    const queryLimit = plan?.queryLimit || 100; // ✅ FIXED: Free plan should have 100, not 1000
-    const allowedWallets = plan?.userLimit ?? (planName === 'Free' ? 1 : 3); // Default based on plan
+    const queryLimit = plan?.queryLimit || 100;
+    const allowedWallets = plan?.userLimit ?? (planName === 'Free' ? 1 : 3);
     const txnLimit = plan?.txnLimit ?? null;
-
-    console.log(`📊 Plan info: ${planName}, wallets: ${allowedWallets}, queries: ${queryLimit}`);
 
     // Get all user wallets
     const allWallets = await getAllUserWallets(userId);
@@ -295,14 +278,6 @@ export async function checkUserPlanLimits(identifier: string): Promise<PlanInfo>
     // Apply counting logic
     const walletDetails = applyWalletCountingLogic(allWallets);
     const usedWallets = walletDetails.filter(w => w.isUnique).length;
-
-    console.log(`🔢 Wallet count: ${usedWallets}/${allowedWallets} used`);
-
-    // ✅ ENHANCED: Better trial/plan validation
-    if (planName === 'Free' && !trialActive) {
-      console.log('❌ Free plan trial expired');
-      // Don't throw error, just mark trial as inactive
-    }
 
     return {
       planName,
@@ -315,29 +290,27 @@ export async function checkUserPlanLimits(identifier: string): Promise<PlanInfo>
     };
 
   } catch (error) {
-    console.error('Error checking user plan limits:', error);
     throw error;
   }
 }
 
 /**
- * ✅ ENHANCED: Check if user can add a new wallet (supports CrossChain)
+ * Check if user can add a new wallet (supports CrossChain)
  */
 export async function canAddWalletToUser(
   userIdOrCrossChainId: string,
   newWalletAddress: string,
   blockchainId: string
 ): Promise<{
+  [x: string]: any;
   canAdd: boolean;
   reason?: string;
   wouldCount: boolean;
 }> {
   try {
-    console.log(`🔍 Checking if can add wallet ${newWalletAddress} to user ${userIdOrCrossChainId}`);
-    
     const planInfo = await checkUserPlanLimits(userIdOrCrossChainId);
     
-    // ✅ ENHANCED: Check if this wallet already exists anywhere in the system
+    // Check if this wallet already exists anywhere in the system
     const [existingPrimary, existingCrossChain] = await Promise.all([
       supabase
         .from('User')
@@ -386,8 +359,6 @@ export async function canAddWalletToUser(
       reason = `Would exceed ${planInfo.planName} plan limit of ${planInfo.allowedWallets} wallets (currently using ${planInfo.usedWallets})`;
     }
 
-    console.log(`📊 Can add wallet: ${canAdd}, would count: ${wouldCount}, new total: ${newCount}/${planInfo.allowedWallets}`);
-
     return {
       canAdd,
       reason,
@@ -395,7 +366,6 @@ export async function canAddWalletToUser(
     };
 
   } catch (error) {
-    console.error('Error checking if can add wallet:', error);
     return {
       canAdd: false,
       reason: 'Failed to check wallet limits',
@@ -405,7 +375,7 @@ export async function canAddWalletToUser(
 }
 
 /**
- * ✅ NEW: Helper function to get user ID from any identifier
+ * Helper function to get user ID from any identifier
  */
 export async function getUserIdFromIdentifier(identifier: string): Promise<string | null> {
   try {
@@ -433,7 +403,6 @@ export async function getUserIdFromIdentifier(identifier: string): Promise<strin
 
     return null;
   } catch (error) {
-    console.error('Error getting user ID from identifier:', error);
     return null;
   }
 }

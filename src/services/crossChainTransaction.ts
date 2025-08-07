@@ -140,15 +140,12 @@ export class CrossChainTransactionService {
       // Recalculate credit score
       try {
         await CreditScoreService.calculateScore(userId);
-        console.log(`✅ Credit score recalculated after transaction: ${userId}`);
       } catch (scoreError) {
-        console.error('⚠️ Error recalculating credit score:', scoreError);
       }
 
       return transaction;
 
     } catch (error) {
-      console.error('Transaction creation error:', error);
       throw error;
     }
   }
@@ -185,7 +182,6 @@ export class CrossChainTransactionService {
       if (error) throw error;
       return updatedTransaction;
     } catch (error) {
-      console.error('Update transaction status error:', error);
       throw error;
     }
   }
@@ -206,7 +202,6 @@ export class CrossChainTransactionService {
       if (error) throw error;
       return transactions || [];
     } catch (error) {
-      console.error('Get user transactions error:', error);
       throw error;
     }
   }
@@ -260,7 +255,6 @@ export class CrossChainTransactionService {
 
       return summary;
     } catch (error) {
-      console.error('Get monthly transaction summary error:', error);
       throw error;
     }
   }
@@ -292,7 +286,6 @@ export class CrossChainTransactionService {
 
       return transaction;
     } catch (error) {
-      console.error('Get transaction by ID error:', error);
       throw error;
     }
   }
@@ -331,7 +324,6 @@ export class CrossChainTransactionService {
       if (error) throw error;
       return cancelledTransaction;
     } catch (error) {
-      console.error('Cancel transaction error:', error);
       throw error;
     }
   }
@@ -381,7 +373,6 @@ export class CrossChainTransactionService {
 
       return stats;
     } catch (error) {
-      console.error('Get transaction stats error:', error);
       throw error;
     }
   }

@@ -50,7 +50,6 @@ const InvoicesView: React.FC = () => {
 
       setInvoices(fetchedInvoices);
     } catch (err) {
-      console.error("Error loading invoices:", err);
     } finally {
       setLoading(false);
     }
@@ -68,7 +67,6 @@ const InvoicesView: React.FC = () => {
       alert(`✅ Invoice #${id} marked as paid`);
       loadInvoices();
     } catch (err) {
-      console.error("Failed to mark paid", err);
       alert("❌ Failed to mark invoice as paid");
     }
   };

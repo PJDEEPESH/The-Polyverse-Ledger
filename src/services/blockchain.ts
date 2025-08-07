@@ -13,7 +13,7 @@ try {
     timeout: 10000 // 10 second timeout
   });
 } catch (error) {
-  console.warn('IPFS client initialization failed:', error);
+  // IPFS client initialization failed - will continue without IPFS
 }
 
 export interface RegisterBlockchainData {
@@ -78,13 +78,9 @@ export class BlockchainService {
         try {
           const ipfsResult = await ipfsClient.add(JSON.stringify(ipfsData));
           ipfsHash = ipfsResult.path;
-          console.log('Blockchain metadata stored in IPFS:', ipfsHash);
         } catch (ipfsError) {
-          console.warn('IPFS storage failed (continuing without IPFS):', ipfsError);
           // Don't throw - IPFS failure shouldn't block blockchain registration
         }
-      } else {
-        console.warn('IPFS client not available, skipping IPFS storage');
       }
 
       // Create blockchain record in database
@@ -99,25 +95,15 @@ export class BlockchainService {
         },
       });
 
-      console.log('Blockchain registered successfully:', {
-        id: blockchain.id,
-        name: blockchain.name,
-        ubid: blockchain.ubid,
-        bnsName: blockchain.bnsName
-      });
-
       return {
         ...blockchain,
         ...(ipfsHash && { ipfsHash })
       };
 
     } catch (error: any) {
-      console.error('Blockchain registration error:', error);
-
-      // Handle Prisma errors - FIXED: Proper type handling for meta.target
+      // Handle Prisma errors
       if (error instanceof Prisma.PrismaClientKnownRequestError) {
         if (error.code === 'P2002') {
-          // Type assertion for meta.target
           const meta = error.meta as { target?: string[] } | undefined;
           const field = meta?.target?.[0] || 'field';
           throw new Error(`${field} already exists`);
@@ -158,7 +144,6 @@ export class BlockchainService {
       return { valid: false };
 
     } catch (error: any) {
-      console.error('API key verification error:', error);
       return { valid: false };
     }
   }
@@ -190,8 +175,6 @@ export class BlockchainService {
       return blockchain;
 
     } catch (error: any) {
-      console.error('UBID resolution error:', error);
-      
       if (error.message === 'Blockchain not found' ||
           error.message === 'Valid UBID is required') {
         throw error;
@@ -228,8 +211,6 @@ export class BlockchainService {
       return blockchain;
 
     } catch (error: any) {
-      console.error('BNS resolution error:', error);
-      
       if (error.message === 'BNS name not found' ||
           error.message === 'Valid BNS name is required') {
         throw error;
@@ -260,7 +241,6 @@ export class BlockchainService {
       return blockchains;
 
     } catch (error: any) {
-      console.error('Failed to fetch blockchains:', error);
       throw new Error('Failed to fetch blockchains');
     }
   }
@@ -292,8 +272,6 @@ export class BlockchainService {
       return blockchain;
 
     } catch (error: any) {
-      console.error('Failed to fetch blockchain by ID:', error);
-      
       if (error.message === 'Blockchain not found' ||
           error.message === 'Valid blockchain ID is required') {
         throw error;
@@ -307,22 +285,19 @@ export class BlockchainService {
   static async cleanup() {
     try {
       await prisma.$disconnect();
-      console.log('Prisma client disconnected');
     } catch (error) {
-      console.error('Error during cleanup:', error);
+      // Error during cleanup - handled silently in production
     }
   }
 }
 
 // Handle process termination
 process.on('SIGINT', async () => {
-  console.log('Received SIGINT, cleaning up...');
   await BlockchainService.cleanup();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-  console.log('Received SIGTERM, cleaning up...');
   await BlockchainService.cleanup();
   process.exit(0);
 });

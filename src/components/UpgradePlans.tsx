@@ -42,7 +42,7 @@ const plans = [
     ],
     containerId: 'paypal-basic-plan',
     planId: 'P-7WV44462TF966624XNB2PKXA', // PayPal plan ID
-    prismaPlanId: 'db0b78fa-cfa3-4dbb-8a2a-d958b7270c2e', // ✅ Database Plan.id for Basic
+    prismaPlanId: 'a946852b-0e64-455b-90f4-6091e8f11ade', // ✅ Database Plan.id for Basic
     planType: 'Basic',
   },
   {
@@ -61,7 +61,7 @@ const plans = [
     ],
     containerId: 'paypal-pro-plan',
     planId: 'P-1LC09938TF381221LNB2PLHQ', // PayPal plan ID
-    prismaPlanId: '89215sd9-37e5-4a59-837f-c6a6079de6de', // ✅ Database Plan.id for Pro
+    prismaPlanId: 'e203a24f-bfba-471f-a8b8-58d513c42b7f', // ✅ Database Plan.id for Pro
     highlight: true,
     planType: 'Pro',
   },
@@ -81,7 +81,7 @@ const plans = [
     ],
     containerId: 'paypal-premium-plan',
     planId: 'P-7S343131C3165360FNB2PJ6A', // PayPal plan ID
-    prismaPlanId: '719937fe-416c-4313-bc22-8b84d6665b8e', // ✅ Database Plan.id for Premium
+    prismaPlanId: '76a4c4e2-b2b2-498d-ad18-91adccdcd3b0', // ✅ Database Plan.id for Premium
     planType: 'Premium',
   },
 ];
@@ -218,28 +218,6 @@ const UpgradePlans: React.FC<UpgradePlansProps> = ({
         {getUpgradeDescription()}
       </p>
 
-      {/* ✅ ENHANCED: Show active trial status banner */}
-      {currentPlanName === 'Free' && trialActive && (
-        <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-green-800 font-medium flex items-center">
-                🎉 Free Trial Active - {currentUser.trialDaysRemaining || 0} days remaining
-              </p>
-              <p className="text-green-600 text-sm mt-1">
-                You're enjoying all premium features! Upgrade now to keep them forever.
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-green-800 font-semibold">
-                {(currentUser.queriesUsed || 0).toLocaleString()} / {(currentUser.queriesLimit || 0).toLocaleString()}
-              </p>
-              <p className="text-green-600 text-sm">Queries Used</p>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ✅ Show trial ended banner */}
       {currentPlanName === 'Free' && trialUsed && !trialActive && (
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
@@ -362,7 +340,7 @@ const UpgradePlans: React.FC<UpgradePlansProps> = ({
               {trialActive && currentPlanName === 'Free' && plan.highlight && (
                 <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
                   <span className="bg-green-500 text-white px-4 py-1 rounded-full text-xs font-medium">
-                    🔥 Upgrade & Keep Features
+                    🔥 Most Popular
                   </span>
                 </div>
               )}
@@ -435,15 +413,15 @@ const UpgradePlans: React.FC<UpgradePlansProps> = ({
                     amount={plan.price}
                     dueDate={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()}
                     onApprove={(subscriptionId) => {
-                      console.log(`✅ ${plan.name} subscription approved:`, subscriptionId);
+                     
                       onApprove(subscriptionId);
                     }}
                     onError={(error) => {
-                      console.error(`❌ ${plan.name} subscription error:`, error);
+                 
                       onError(error);
                     }}
                     onCancel={() => {
-                      console.log(`⚠️ ${plan.name} subscription cancelled`);
+             
                       onCancel();
                     }}
                     apiBaseUrl="http://localhost:3000"

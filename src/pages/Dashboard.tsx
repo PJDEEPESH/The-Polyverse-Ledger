@@ -22,7 +22,7 @@ const Dashboard = () => {
         const data = await response.json();
         setStats(data);
       } catch (error) {
-        console.error('Failed to fetch dashboard stats:', error);
+        
       }
     };
 
@@ -33,7 +33,7 @@ const Dashboard = () => {
         const data = await response.json();
         setRecentActivity(data);
       } catch (error) {
-        console.error('Failed to fetch recent activity:', error);
+       
       }
     };
 
@@ -51,7 +51,7 @@ const Dashboard = () => {
         setUserInfo(json.data);
       }
     } catch (error) {
-      console.error('Failed to fetch user info:', error);
+      
     }
   };
     fetchStats();

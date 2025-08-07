@@ -3,8 +3,8 @@ import React from 'react';
 export interface PlanInfo {
   name: string;
   queries: number;
-  duration: string;   
-  users: number;
+  duration?: string;   
+  users?: number;
   features: string[];
 }
 

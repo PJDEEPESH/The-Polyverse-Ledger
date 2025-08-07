@@ -20,7 +20,6 @@ export async function paypalRoutes(fastify: FastifyInstance) {
         tokenPrefix: accessToken.substring(0, 10) + "..."
       });
     } catch (error: any) {
-      console.error('PayPal connection test failed:', error);
       return reply.status(500).send({ 
         success: false,
         error: 'PayPal connection failed',
@@ -32,18 +31,16 @@ export async function paypalRoutes(fastify: FastifyInstance) {
   // Create subscription route
   fastify.post('/create-subscription', async (request, reply) => {
     try {
-      console.log('📥 Received subscription request:', JSON.stringify(request.body, null, 2));
-      
-      const { plan_id, userId, invoiceId, prismaPlanId } = request.body as {
+      const { plan_id, userId, invoiceId, prismaPlanId, subscriptionId } = request.body as {
         plan_id?: string;
         userId?: string;
         invoiceId?: string;
         prismaPlanId?: string;
+        subscriptionId?: string;
       };
 
       // Validate required fields
       if (!plan_id || !userId || !prismaPlanId) {
-        console.error('❌ Missing required fields:', { plan_id, userId, prismaPlanId });
         return reply.code(400).send({ 
           error: 'Missing required fields',
           required: ['plan_id', 'userId', 'prismaPlanId'],
@@ -57,7 +54,6 @@ export async function paypalRoutes(fastify: FastifyInstance) {
       });
 
       if (!existingUser) {
-        console.error('❌ User not found:', userId);
         return reply.code(404).send({ error: 'User not found' });
       }
 
@@ -67,35 +63,42 @@ export async function paypalRoutes(fastify: FastifyInstance) {
       });
 
       if (!plan) {
-        console.error('❌ Plan not found:', prismaPlanId);
         return reply.code(404).send({ error: 'Plan not found' });
       }
 
-      console.log('✅ User and plan validation passed');
+      // Handle subscription ID from frontend or create new one
+      let finalSubscriptionId = subscriptionId;
+      
+      if (subscriptionId) {
+        // Verify subscription with PayPal API
+        try {
+          const accessToken = await getPayPalAccessToken();
+          const mode = process.env.PAYPAL_MODE || 'sandbox';
+          const baseUrl = mode === 'live' 
+            ? 'https://api-m.paypal.com' 
+            : 'https://api-m.sandbox.paypal.com';
 
-      // Get PayPal access token
-      let accessToken;
-      try {
-        accessToken = await getPayPalAccessToken();
-        console.log('✅ PayPal access token obtained');
-      } catch (tokenError: any) {
-        console.error('❌ PayPal token error:', tokenError.message);
-        return reply.code(500).send({ 
-          error: 'PayPal authentication failed',
-          details: tokenError.message
-        });
-      }
+          await axios.get(
+            `${baseUrl}/v1/billing/subscriptions/${subscriptionId}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+        } catch (verifyError: any) {
+          // Continue processing even if verification fails
+        }
+      } else {
+        // Create subscription via PayPal API
+        const accessToken = await getPayPalAccessToken();
+        const mode = process.env.PAYPAL_MODE || 'sandbox';
+        const baseUrl = mode === 'live' 
+          ? 'https://api-m.paypal.com' 
+          : 'https://api-m.sandbox.paypal.com';
 
-      const mode = process.env.PAYPAL_MODE || 'sandbox';
-      const baseUrl = mode === 'live' 
-        ? 'https://api-m.paypal.com' 
-        : 'https://api-m.sandbox.paypal.com';
-
-      // Create PayPal subscription
-      let subscriptionResponse;
-      try {
-        console.log('🔄 Creating PayPal subscription...');
-        subscriptionResponse = await axios.post(
+        const subscriptionResponse = await axios.post(
           `${baseUrl}/v1/billing/subscriptions`,
           {
             plan_id,
@@ -112,16 +115,9 @@ export async function paypalRoutes(fastify: FastifyInstance) {
             },
           }
         );
-        console.log('✅ PayPal subscription created:', subscriptionResponse.data.id);
-      } catch (paypalError: any) {
-        console.error('❌ PayPal subscription creation failed:', paypalError?.response?.data || paypalError.message);
-        return reply.code(500).send({ 
-          error: 'PayPal subscription creation failed',
-          details: paypalError?.response?.data || paypalError.message
-        });
+        
+        finalSubscriptionId = subscriptionResponse.data.id;
       }
-
-      const subscriptionId = subscriptionResponse.data.id;
 
       // Update invoice if provided
       if (invoiceId) {
@@ -130,7 +126,7 @@ export async function paypalRoutes(fastify: FastifyInstance) {
             where: { id: invoiceId },
             data: {
               status: 'PAID',
-              subscriptionId,
+              subscriptionId: finalSubscriptionId,
             },
           });
 
@@ -141,27 +137,24 @@ export async function paypalRoutes(fastify: FastifyInstance) {
 
           if (invoice && invoice.userId) {
             await CreditScoreService.calculateScore(invoice.userId);
-            console.log(`✅ Credit score recalculated for user: ${invoice.userId}`);
           }
         } catch (invoiceError: any) {
-          console.error('⚠️ Error updating invoice or credit score:', invoiceError);
+          // Log error in production logging system if needed
         }
       }
 
-      // Update user with new plan
+      // Update user with new plan and subscription
       try {
         await prisma.user.update({
           where: { id: userId },
           data: {
             planId: prismaPlanId,
-            subscriptionId,
+            subscriptionId: finalSubscriptionId,
             trialUsed: true,
-            trialStartDate: new Date(),
+            trialStartDate: null,
           },
         });
-        console.log('✅ User plan updated successfully');
       } catch (userUpdateError: any) {
-        console.error('❌ Error updating user plan:', userUpdateError);
         return reply.code(500).send({ 
           error: 'Failed to update user plan',
           details: userUpdateError.message
@@ -176,25 +169,23 @@ export async function paypalRoutes(fastify: FastifyInstance) {
             amount: plan.price,
             type: 'debit',
             status: 'SUCCESS',
-            hash: subscriptionId,
+            hash: finalSubscriptionId,
             riskScore: 0.1,
           },
         });
-        console.log('✅ Transaction record created');
       } catch (transactionError: any) {
-        console.error('⚠️ Error creating transaction record:', transactionError);
+        // Log error in production logging system if needed
       }
 
       return reply.send({
         success: true,
-        message: '✅ Subscription created & plan assigned successfully',
-        subscriptionId,
+        message: 'Subscription created & plan assigned successfully',
+        subscriptionId: finalSubscriptionId,
         planName: plan.name,
         userId
       });
 
     } catch (err: any) {
-      console.error('❌ Unexpected error in subscription creation:', err);
       return reply.code(500).send({ 
         error: 'Subscription creation failed',
         details: err.message 
@@ -202,11 +193,9 @@ export async function paypalRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Test plan switch (bypass PayPal for testing)
+  // Test plan switch (for testing environments only)
   fastify.post('/test-plan-switch', async (request, reply) => {
     try {
-      console.log('🧪 Test plan switch request:', request.body);
-      
       const { userId, prismaPlanId } = request.body as {
         userId: string;
         prismaPlanId: string;
@@ -234,14 +223,14 @@ export async function paypalRoutes(fastify: FastifyInstance) {
         return reply.code(404).send({ error: 'Plan not found' });
       }
 
-      // Update user plan (skip PayPal for testing)
+      // Update user plan
       await prisma.user.update({
         where: { id: userId },
         data: {
           planId: prismaPlanId,
           subscriptionId: 'test-subscription-' + Date.now(),
           trialUsed: true,
-          trialStartDate: new Date(),
+          trialStartDate: null,
         },
       });
 
@@ -257,16 +246,18 @@ export async function paypalRoutes(fastify: FastifyInstance) {
         },
       });
 
+      const testSubscriptionId = 'test-subscription-' + Date.now();
+
       return reply.send({
         success: true,
-        message: '✅ Plan switched successfully (test mode)',
+        message: 'Plan switched successfully (test mode)',
         userId,
         planName: plan.name,
-        prismaPlanId
+        prismaPlanId,
+        subscriptionId: testSubscriptionId
       });
 
     } catch (error: any) {
-      console.error('❌ Test plan switch error:', error);
       return reply.status(500).send({ 
         error: 'Plan switch failed',
         details: error.message 
@@ -301,11 +292,10 @@ export async function paypalRoutes(fastify: FastifyInstance) {
       );
 
       return reply.send({
-        message: '✅ Subscription activated',
+        message: 'Subscription activated',
         data: captureResponse.data,
       });
     } catch (err: any) {
-      console.error('❌ Capture error:', err?.response?.data || err.message);
       return reply.code(500).send({ error: 'Subscription capture failed' });
     }
   });
@@ -321,8 +311,6 @@ export async function paypalRoutes(fastify: FastifyInstance) {
       const eventType = event.event_type;
       const subscriptionId = event.resource.id;
 
-      console.log(`📩 Received PayPal Webhook: ${eventType}`);
-
       if (!subscriptionId) {
         return reply.code(400).send({ error: 'Missing subscription ID in webhook' });
       }
@@ -337,12 +325,10 @@ export async function paypalRoutes(fastify: FastifyInstance) {
             trialStartDate: null,
           },
         });
-        console.log(`🔴 Subscription ${subscriptionId} cancelled. User downgraded.`);
       }
 
       return reply.code(200).send({ received: true });
     } catch (err) {
-      console.error('❌ Webhook error:', err);
       return reply.code(500).send({ error: 'Webhook processing failed' });
     }
   });

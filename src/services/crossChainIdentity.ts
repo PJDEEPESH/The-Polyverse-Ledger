@@ -61,14 +61,17 @@ export class CrossChainIdentityService {
 
       // ✅ 4. Create the identity
       const now = new Date().toISOString();
+      const identityId = generateUUID();
+      
       const { data: identity, error } = await supabase
         .from('CrossChainIdentity')
         .insert({
-          id: generateUUID(),
+          id: identityId,
           userId,
           blockchainId,
           walletAddress,
-          proofHash: generateUUID(), // Generate proper proof
+          proofHash: generateUUID(),
+          creditScore: null, // ✅ Start with null, calculate later
           createdAt: now,
           updatedAt: now,
         })
@@ -81,68 +84,33 @@ export class CrossChainIdentityService {
 
       if (error) throw error;
 
-      // ✅ 5. Recalculate credit score
+      // ✅ 5. Calculate initial credit score dynamically
+      let calculatedScore = 300; // fallback
+      try {
+        calculatedScore = await CreditScoreService.calculateCrossChainScore(identityId);
+      } catch (scoreError) {
+        // Update with fallback score
+        await supabase
+          .from('CrossChainIdentity')
+          .update({ creditScore: calculatedScore })
+          .eq('id', identityId);
+      }
+
+      // ✅ 6. Also recalculate user's main credit score
       try {
         await CreditScoreService.calculateScore(userId);
-        console.log(`✅ Credit score recalculated after identity creation: ${userId}`);
       } catch (scoreError) {
-        console.error('⚠️ Error recalculating credit score:', scoreError);
       }
 
       return {
         ...identity,
+        creditScore: calculatedScore, // Return the calculated score
         countsTowardLimit: canAdd.wouldCount,
-        message: `Wallet added successfully ${canAdd.wouldCount ? '(counts toward limit)' : '(cross-chain duplicate)'}`
+        message: `Wallet added successfully with credit score ${calculatedScore}`
       };
 
     } catch (error) {
-      console.error('CrossChainIdentity creation error:', error);
       throw error;
     }
-  }
-
-  // ✅ Get all identities for a user
-  static async getUserIdentities(userId: string) {
-    const { data: identities, error } = await supabase
-      .from('CrossChainIdentity')
-      .select(`
-        *,
-        Blockchain!blockchainId(name, ubid)
-      `)
-      .eq('userId', userId)
-      .order('createdAt', { ascending: false });
-
-    if (error) throw error;
-    return identities || [];
-  }
-
-  // ✅ Remove identity with plan validation
-  static async removeIdentity(identityId: string, userId: string) {
-    // Verify ownership
-    const { data: identity } = await supabase
-      .from('CrossChainIdentity')
-      .select('userId')
-      .eq('id', identityId)
-      .single();
-
-    if (!identity || identity.userId !== userId) {
-      throw new Error('Identity not found or access denied');
-    }
-
-    const { error } = await supabase
-      .from('CrossChainIdentity')
-      .delete()
-      .eq('id', identityId);
-
-    if (error) throw error;
-
-    // Recalculate credit score after removal
-    try {
-      await CreditScoreService.calculateScore(userId);
-    } catch (scoreError) {
-      console.error('⚠️ Error recalculating credit score after removal:', scoreError);
-    }
-
-    return { success: true, message: 'Wallet removed successfully' };
   }
 }

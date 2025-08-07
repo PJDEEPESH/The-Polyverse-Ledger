@@ -25,142 +25,102 @@ interface OrgData {
 }
 
 export async function planRoutes(fastify: FastifyInstance) {
-  // // Get all plans
-  // fastify.get('/api/v1/plans', async (request, reply) => {
-  //   try {
-  //     const { data: plans, error } = await supabase
-  //       .from('Plan')
-  //       .select('*')
-  //       .order('createdAt', { ascending: false });
 
-  //     if (error) throw error;
-  //     return reply.send({ success: true, data: plans || [] });
-  //   } catch (error) {
-  //     console.error('Fetch plans error:', error);
-  //     return reply.status(500).send({
-  //       success: false,
-  //       error: 'Failed to fetch plans',
-  //       details: error instanceof Error ? error.message : String(error),
-  //     });
-  //   }
-  // });
+  // Get user plan details
+  fastify.get('/api/v1/plan/:walletAddress/:blockchainId', async (request, reply) => {
+    try {
+      const { walletAddress, blockchainId } = request.params as { 
+        walletAddress: string; 
+        blockchainId: string; 
+      };
 
-  // ✅ FIXED: Unified plan resolution with proper typing
- // src/routes/plan.ts - ENHANCED to include subscription status
-fastify.get('/api/v1/plan/:walletAddress/:blockchainId', async (request, reply) => {
-  try {
-    const { walletAddress, blockchainId } = request.params as { 
-      walletAddress: string; 
-      blockchainId: string; 
-    };
+      // Fetch user data
+      const { data: user, error: userError } = await supabase
+        .from('User')
+        .select('id, planId, orgId, trialStartDate, trialUsed')
+        .eq('walletAddress', walletAddress)
+        .eq('blockchainId', blockchainId)
+        .maybeSingle();
 
-    console.log(`🔍 Plan request for: ${walletAddress}/${blockchainId}`);
+      if (userError) {
+        return reply.status(500).send({
+          success: false,
+          error: 'Database error',
+          message: userError.message
+        });
+      }
 
-    // ✅ FIXED: Only select columns that exist in your User table
-    const { data: user, error: userError } = await supabase
-      .from('User')
-      .select('id, planId, orgId, trialStartDate, trialUsed')
-      .eq('walletAddress', walletAddress)
-      .eq('blockchainId', blockchainId)
-      .maybeSingle();
+      if (!user) {
+        return reply.send({
+          success: true,
+          planName: 'Free',
+          queryLimit: 100,
+          userLimit: 1,
+          planSource: 'free',
+          trialStartDate: null,
+          trialUsed: false,
+          subscriptionActive: false,
+          subscriptionStartDate: null,
+          subscriptionEndDate: null,
+        });
+      }
 
-    console.log('🔍 User query result:', { user, userError });
+      // Get plan data
+      let effectivePlan = null;
+      let planSource = 'free';
 
-    if (userError) {
-      console.error('❌ Database error:', userError);
-      return reply.status(500).send({
-        success: false,
-        error: 'Database error',
-        message: userError.message
-      });
-    }
+      if (user.planId) {
+        const { data: planData, error: planError } = await supabase
+          .from('Plan')
+          .select('name, queryLimit, userLimit')
+          .eq('id', user.planId)
+          .maybeSingle();
+        
+        if (planData && !planError) {
+          effectivePlan = planData;
+          planSource = 'individual';
+        }
+      }
 
-    if (!user) {
-      console.log('⚠️ User not found, returning Free plan default');
+      if (!effectivePlan) {
+        effectivePlan = {
+          name: 'Free',
+          queryLimit: 100,
+          userLimit: 1
+        };
+        planSource = 'free';
+      }
+
+      // Determine subscription status
+      let subscriptionActive = false;
+      let subscriptionEndDate = null;
+
+      if (planSource !== 'free') {
+        subscriptionActive = true;
+        subscriptionEndDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+
       return reply.send({
         success: true,
-        planName: 'Free',
-        queryLimit: 100,
-        userLimit: 1,
-        planSource: 'free',
-        trialStartDate: null,
-        trialUsed: false,
-        subscriptionActive: false,
+        planName: effectivePlan.name,
+        queryLimit: effectivePlan.queryLimit,
+        userLimit: effectivePlan.userLimit,
+        planSource,
+        trialStartDate: user.trialStartDate,
+        trialUsed: user.trialUsed,
+        subscriptionActive,
         subscriptionStartDate: null,
-        subscriptionEndDate: null,
+        subscriptionEndDate,
+      });
+
+    } catch (error) {
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to fetch plan',
+        message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
-
-    // Get plan data
-    let effectivePlan = null;
-    let planSource = 'free';
-
-    if (user.planId) {
-      console.log('🔍 Looking up plan for planId:', user.planId);
-      const { data: planData, error: planError } = await supabase
-        .from('Plan')
-        .select('name, queryLimit, userLimit')
-        .eq('id', user.planId)
-        .maybeSingle();
-      
-      console.log('🔍 Plan lookup result:', { planData, planError });
-      
-      if (planData && !planError) {
-        effectivePlan = planData;
-        planSource = 'individual';
-      }
-    }
-
-    if (!effectivePlan) {
-      effectivePlan = {
-        name: 'Free',
-        queryLimit: 100,
-        userLimit: 1
-      };
-      planSource = 'free';
-    }
-
-    // ✅ FIXED: Since subscription columns don't exist, assume active for paid plans
-    let subscriptionActive = false;
-    let subscriptionEndDate = null;
-
-    if (planSource !== 'free') {
-      // If user has a paid plan, assume it's active
-      subscriptionActive = true;
-      // Set a default end date (30 days from now)
-      subscriptionEndDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    }
-
-    console.log('🎯 Final plan response:', {
-      planName: effectivePlan.name,
-      queryLimit: effectivePlan.queryLimit,
-      planSource,
-      subscriptionActive
-    });
-
-    return reply.send({
-      success: true,
-      planName: effectivePlan.name,
-      queryLimit: effectivePlan.queryLimit,
-      userLimit: effectivePlan.userLimit,
-      planSource,
-      trialStartDate: user.trialStartDate,
-      trialUsed: user.trialUsed,
-      subscriptionActive,
-      subscriptionStartDate: null, // ✅ Set to null since column doesn't exist
-      subscriptionEndDate,
-    });
-
-  } catch (error) {
-    console.error('❌ Plan fetch error:', error);
-    return reply.status(500).send({
-      success: false,
-      error: 'Failed to fetch plan',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    });
-  }
-});
-
+  });
 
   // Credit score endpoint
   fastify.get('/api/v1/credit-score/:walletAddress/:blockchainId', async (request, reply) => {
@@ -197,7 +157,6 @@ fastify.get('/api/v1/plan/:walletAddress/:blockchainId', async (request, reply) 
         creditScore: user.creditScore || 0 
       });
     } catch (error) {
-      console.error('Fetch credit score error:', error);
       return reply.status(500).send({
         error: 'Failed to fetch credit score',
         details: error instanceof Error ? error.message : String(error),
@@ -236,7 +195,6 @@ fastify.get('/api/v1/plan/:walletAddress/:blockchainId', async (request, reply) 
         creditScore: user.creditScore || 0 
       });
     } catch (error) {
-      console.error('Fetch credit score error:', error);
       return reply.status(500).send({
         error: 'Failed to fetch credit score',
         details: error instanceof Error ? error.message : String(error),

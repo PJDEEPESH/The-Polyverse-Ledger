@@ -1,4 +1,4 @@
-//src/routes/creditScore.ts - CORRECTED: Fixed duplicate routes and CrossChainIdentity support
+//src/routes/creditScore.ts - PRODUCTION VERSION: Fixed duplicate routes and CrossChainIdentity support
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { CreditScoreService } from '../services/creditScore.js';
@@ -34,7 +34,7 @@ const walletParamsSchema = z.object({
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid blockchain ID format'),
 });
 
-// ✅ ADD THIS FUNCTION to your creditScore.ts
+// ✅ Enhanced wallet credit score finder with CrossChain support
 async function findWalletCreditScore(walletAddress: string, blockchainId: string): Promise<{
   found: boolean;
   userId?: string;
@@ -44,17 +44,19 @@ async function findWalletCreditScore(walletAddress: string, blockchainId: string
   error?: string;
 }> {
   try {
-    console.log(`🔍 DEBUG: Looking for wallet ${walletAddress} on chain ${blockchainId}`);
-    
-    // Check primary wallet (User table)
-    const { data: primaryUser, error: primaryError } = await supabase
-      .from('User')
-      .select('id, creditScore')
-      .eq('walletAddress', walletAddress)
-      .eq('blockchainId', blockchainId)
-      .maybeSingle();
-
-    console.log('🔍 Primary user check:', { data: primaryUser, error: primaryError });
+    // ✅ Check primary wallet using Prisma (more efficient)
+    const primaryUser = await prisma.user.findUnique({
+      where: {
+        blockchainId_walletAddress: {
+          blockchainId,
+          walletAddress
+        }
+      },
+      select: {
+        id: true,
+        creditScore: true
+      }
+    });
 
     if (primaryUser) {
       return {
@@ -65,40 +67,37 @@ async function findWalletCreditScore(walletAddress: string, blockchainId: string
       };
     }
 
-    // ✅ CRITICAL: Check CrossChainIdentity table
-    const { data: crossChainUser, error: crossChainError } = await supabase
-      .from('CrossChainIdentity')
-      .select(`
-        id,
-        userId,
-        creditScore,
-        User!userId(id)
-      `)
-      .eq('walletAddress', walletAddress)
-      .eq('blockchainId', blockchainId)
-      .maybeSingle();
+    // ✅ Check CrossChainIdentity using Prisma
+    const crossChainIdentity = await prisma.crossChainIdentity.findUnique({
+      where: {
+        blockchainId_walletAddress: {
+          blockchainId,
+          walletAddress
+        }
+      },
+      include: {
+        user: {
+          select: { id: true }
+        }
+      }
+    });
 
-    console.log('🔍 CrossChain user check:', { data: crossChainUser, error: crossChainError });
-
-    if (crossChainUser && crossChainUser.User) {
+    if (crossChainIdentity && crossChainIdentity.user) {
       return {
         found: true,
-        userId: crossChainUser.userId,
-        creditScore: crossChainUser.creditScore,
+        userId: crossChainIdentity.userId,
+        creditScore: crossChainIdentity.creditScore,
         source: 'crosschain',
-        crossChainIdentityId: crossChainUser.id
+        crossChainIdentityId: crossChainIdentity.id
       };
     }
 
-    // If we get here, wallet not found
-    console.log('❌ Wallet not found in either table');
     return {
       found: false,
       error: 'Wallet not found in system'
     };
     
   } catch (error) {
-    console.error('❌ Error in findWalletCreditScore:', error);
     return {
       found: false,
       error: `Database error: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -106,13 +105,10 @@ async function findWalletCreditScore(walletAddress: string, blockchainId: string
   }
 }
 
-
 export async function creditScoreRoutes(fastify: FastifyInstance) {
   
   // Global error handler
   fastify.setErrorHandler(async (error, request, reply) => {
-    console.error('Credit score route error:', error);
-    
     if (error.validation) {
       return reply.status(400).send({
         success: false,
@@ -148,8 +144,6 @@ export async function creditScoreRoutes(fastify: FastifyInstance) {
       const sanitizedParams = sanitizeObject(request.params);
       const { userId } = userIdSchema.parse(sanitizedParams);
 
-      console.log(`📊 Getting credit score for primary user: ${userId}`);
-
       // Check if user exists
       const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -181,8 +175,6 @@ export async function creditScoreRoutes(fastify: FastifyInstance) {
         blockchainId: user.blockchainId
       });
     } catch (error) {
-      console.error('Primary user credit score fetch error:', error);
-      
       if (error instanceof z.ZodError) {
         return reply.status(400).send({
           success: false,
@@ -198,7 +190,7 @@ export async function creditScoreRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // ✅ NEW: GET /api/v1/credit-score/crosschain/:crossChainIdentityId
+  // ✅ GET /api/v1/credit-score/crosschain/:crossChainIdentityId
   fastify.get('/crosschain/:crossChainIdentityId', {
     preHandler: [authenticationHook, queryLimitHook],
     schema: {
@@ -214,8 +206,6 @@ export async function creditScoreRoutes(fastify: FastifyInstance) {
     try {
       const sanitizedParams = sanitizeObject(request.params);
       const { crossChainIdentityId } = crossChainIdSchema.parse(sanitizedParams);
-
-      console.log(`📊 Getting credit score for CrossChainIdentity: ${crossChainIdentityId}`);
 
       // Check if CrossChainIdentity exists
       const { data: crossChainIdentity } = await supabase
@@ -252,8 +242,6 @@ export async function creditScoreRoutes(fastify: FastifyInstance) {
         blockchainId: crossChainIdentity.blockchainId
       });
     } catch (error) {
-      console.error('CrossChain credit score fetch error:', error);
-      
       if (error instanceof z.ZodError) {
         return reply.status(400).send({
           success: false,
@@ -269,80 +257,108 @@ export async function creditScoreRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // ✅ FIXED: Single wallet endpoint (removed duplicate)
-  // ✅ ADD THIS ROUTE to your creditScore.ts
-fastify.get('/wallet/:walletAddress/:blockchainId', {
-  // preHandler: [authenticationHook, walletValidationHook, queryLimitHook],
-  schema: {
-    params: {
-      type: 'object',
-      required: ['walletAddress', 'blockchainId'],
-      properties: {
-        walletAddress: { type: 'string' },
-        blockchainId: { type: 'string' },
+  // ✅ GET /api/v1/credit-score/wallet/:walletAddress/:blockchainId
+  fastify.get('/wallet/:walletAddress/:blockchainId', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['walletAddress', 'blockchainId'],
+        properties: {
+          walletAddress: { type: 'string' },
+          blockchainId: { type: 'string' },
+        },
       },
     },
-  },
-}, async (request, reply) => {
-  try {
-    const sanitizedParams = sanitizeObject(request.params);
-    const { walletAddress, blockchainId } = walletParamsSchema.parse(sanitizedParams);
+  }, async (request, reply) => {
+    try {
+      const sanitizedParams = sanitizeObject(request.params);
+      const { walletAddress, blockchainId } = walletParamsSchema.parse(sanitizedParams);
 
-    console.log(`📊 Getting credit score for wallet: ${walletAddress} on ${blockchainId}`);
+      // ✅ First check primary wallet (User table)
+      const primaryUser = await prisma.user.findUnique({
+        where: {
+          blockchainId_walletAddress: {
+            blockchainId,
+            walletAddress
+          }
+        },
+        select: {
+          id: true,
+          creditScore: true,
+          walletAddress: true,
+          blockchainId: true
+        }
+      });
 
-    const walletInfo = await findWalletCreditScore(walletAddress, blockchainId);
+      if (primaryUser) {
+        const freshScore = await CreditScoreService.calculateScore(primaryUser.id);
+        
+        return reply.send({ 
+          success: true, 
+          userId: primaryUser.id,
+          creditScore: freshScore,
+          source: 'primary',
+          walletAddress,
+          blockchainId
+        });
+      }
 
-    if (!walletInfo.found) {
-      console.log(`❌ Wallet not found: ${walletAddress}/${blockchainId}`);
+      // ✅ Check CrossChainIdentity table
+      const crossChainIdentity = await prisma.crossChainIdentity.findUnique({
+        where: {
+          blockchainId_walletAddress: {
+            blockchainId,
+            walletAddress
+          }
+        },
+        include: {
+          user: {
+            select: { id: true }
+          }
+        }
+      });
+
+      if (crossChainIdentity) {
+        // Calculate fresh CrossChain score
+        const freshScore = await CreditScoreService.calculateCrossChainScore(crossChainIdentity.id);
+        
+        return reply.send({ 
+          success: true, 
+          userId: crossChainIdentity.userId,
+          crossChainIdentityId: crossChainIdentity.id,
+          creditScore: freshScore,
+          source: 'crosschain',
+          walletAddress,
+          blockchainId
+        });
+      }
+
+      // ✅ Wallet not found in either table
       return reply.status(404).send({
         success: false,
-        error: walletInfo.error || 'Wallet not found',
-        code: 'WALLET_NOT_FOUND'
+        error: 'Wallet not found in system',
+        code: 'WALLET_NOT_FOUND',
+        walletAddress,
+        blockchainId
       });
-    }
 
-    console.log(`✅ Found wallet: ${JSON.stringify(walletInfo)}`);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Invalid wallet address or blockchain ID format',
+          details: error.errors
+        });
+      }
 
-    // Recalculate score based on wallet type
-    let freshScore: number;
-    if (walletInfo.source === 'primary') {
-      freshScore = await CreditScoreService.calculateScore(walletInfo.userId!);
-    } else {
-      // For CrossChainIdentity, use the stored credit score for now
-      // You can implement calculateCrossChainScore later
-      freshScore = walletInfo.creditScore || 500;
-    }
-
-    return reply.send({ 
-      success: true, 
-      userId: walletInfo.userId,
-      crossChainIdentityId: walletInfo.crossChainIdentityId,
-      creditScore: freshScore,
-      source: walletInfo.source,
-      walletAddress,
-      blockchainId
-    });
-  } catch (error) {
-    console.error('Wallet credit score fetch error:', error);
-    
-    if (error instanceof z.ZodError) {
-      return reply.status(400).send({
+      return reply.status(500).send({
         success: false,
-        error: 'Invalid wallet address or blockchain ID format',
-        details: error.errors
+        error: error instanceof Error ? error.message : String(error),
       });
     }
+  });
 
-    return reply.status(500).send({
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-});
-
-
-
-  // ✅ NEW: GET /api/v1/credit-score/user/:userId/all
+  // ✅ GET /api/v1/credit-score/user/:userId/all
   fastify.get('/user/:userId/all', {
     preHandler: [authenticationHook, queryLimitHook],
     schema: {
@@ -358,8 +374,6 @@ fastify.get('/wallet/:walletAddress/:blockchainId', {
     try {
       const sanitizedParams = sanitizeObject(request.params);
       const { userId } = userIdSchema.parse(sanitizedParams);
-
-      console.log(`📊 Getting all credit scores for user: ${userId}`);
 
       // Check if user exists
       const user = await prisma.user.findUnique({
@@ -421,8 +435,6 @@ fastify.get('/wallet/:walletAddress/:blockchainId', {
         totalWallets: 1 + crossChainScores.length
       });
     } catch (error) {
-      console.error('All credit scores fetch error:', error);
-      
       if (error instanceof z.ZodError) {
         return reply.status(400).send({
           success: false,

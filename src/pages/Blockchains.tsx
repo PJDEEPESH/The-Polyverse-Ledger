@@ -24,21 +24,17 @@ const BlockchainsPage = () => {
 
   const fetchBlockchains = async () => {
     try {
-      console.log('Fetching blockchains...');
       const res = await fetch('http://localhost:3000/api/v1/blockchain/list');
-      console.log('Response status:', res.status);
-      
       if (!res.ok) {
         const errorText = await res.text();
-        console.error('Error response:', errorText);
         throw new Error(`Failed to fetch blockchains: ${res.status}`);
       }
       
       const data = await res.json();
-      console.log('Fetched data:', data);
+
       setBlockchains(data);
     } catch (err: any) {
-      console.error('Fetch error:', err);
+
       setError(err.message);
     } finally {
       setLoading(false);
@@ -58,34 +54,29 @@ const BlockchainsPage = () => {
     }
 
     try {
-      console.log('Registering blockchain:', blockchainName);
+
       const response = await fetch('http://localhost:3000/api/v1/blockchain/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: blockchainName.trim() }),
       });
       
-      console.log('Register response status:', response.status);
+
       
       if (response.ok) {
         const result = await response.json();
-        console.log('Registration successful:', result);
+
         setShowModal(false);
         setBlockchainName('');
         fetchBlockchains(); // Refresh the list
       } else {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('Registration failed:', errorData);
-        alert(`Registration failed: ${errorData.error || 'Unknown error'}`);
+
       }
     } catch (error) {
-      console.error('Failed to register blockchain:', error);
       alert('Failed to register blockchain. Please try again.');
     }
   };
 
-  // Debug render
-  console.log('Component rendering - State:', { loading, error, blockchainsCount: blockchains.length, showModal });
 
   return (
     <Layout>

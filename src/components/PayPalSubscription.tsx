@@ -1,375 +1,3 @@
-// // src/components/PayPalSubscription.tsx
-// import { useEffect, useRef, useState, useCallback } from "react";
-// import axios from "axios";
-
-// declare global {
-//   interface Window {
-//     paypal: any;
-//   }
-// }
-
-// interface PayPalSubscriptionProps {
-//   planId: string;
-//   prismaPlanId: string;
-//   containerId: string;
-//   userId: string;
-//   blockchainId?: string;
-//   walletAddress?: string;
-//   amount?: number;
-//   dueDate?: string;
-//   onApprove?: (subscriptionId: string) => void;
-//   onError?: (error: string) => void;
-//   onCancel?: () => void;
-//   apiBaseUrl?: string;
-// }
-
-// let isScriptLoaded = false;
-// let scriptPromise: Promise<void> | null = null;
-
-// const PayPalSubscription = ({
-//   planId,
-//   prismaPlanId,
-//   containerId,
-//   userId,
-//   blockchainId,
-//   walletAddress,
-//   amount,
-//   dueDate,
-//   onApprove,
-//   onError,
-//   onCancel,
-//   apiBaseUrl = "http://localhost:3000",
-// }: PayPalSubscriptionProps) => {
-//   const mountedRef = useRef(true);
-//   const containerRef = useRef<HTMLDivElement>(null);
-//   const buttonsRef = useRef<any>(null);
-//   const initializationRef = useRef(false);
-
-//   const [isLoading, setIsLoading] = useState(true);
-//   const [error, setError] = useState<string | null>(null);
-
-//   // ✅ REPLACE WITH YOUR ACTUAL SANDBOX CLIENT ID
-//   const CLIENT_ID = "YOUR_SANDBOX_CLIENT_ID_HERE"; // You need to replace this
-
-//   const loadPayPalScript = useCallback((): Promise<void> => {
-//     if (isScriptLoaded && window.paypal) return Promise.resolve();
-//     if (scriptPromise) return scriptPromise;
-
-//     console.log('🔄 Loading PayPal SDK for container:', containerId);
-
-//     scriptPromise = new Promise((resolve, reject) => {
-//       // Remove existing script
-//       const existingScript = document.getElementById("paypal-sdk-script");
-//       if (existingScript) {
-//         existingScript.remove();
-//         console.log('🗑️ Removed existing PayPal script');
-//       }
-
-//       const script = document.createElement("script");
-      
-//       // ✅ Use sandbox PayPal SDK
-//       script.src = `https://www.sandbox.paypal.com/sdk/js?client-id=${CLIENT_ID}&vault=true&intent=subscription&debug=true`;
-//       script.id = "paypal-sdk-script";
-//       script.async = true;
-
-//       script.onload = () => {
-//         console.log('✅ PayPal SDK loaded successfully');
-//         setTimeout(() => {
-//           if (window.paypal) {
-//             isScriptLoaded = true;
-//             resolve();
-//           } else {
-//             console.error('❌ PayPal object not found after script load');
-//             reject(new Error("PayPal SDK loaded but window.paypal not available"));
-//           }
-//         }, 500);
-//       };
-
-//       script.onerror = (event) => {
-//         console.error('❌ PayPal SDK failed to load:', event);
-//         console.error('❌ Check client ID and network connection');
-//         scriptPromise = null;
-//         isScriptLoaded = false;
-//         reject(new Error("Failed to load PayPal SDK - Invalid client ID or network error"));
-//       };
-
-//       document.head.appendChild(script);
-//     });
-
-//     return scriptPromise;
-//   }, [CLIENT_ID, containerId]);
-
-//   const cleanupContainer = useCallback(() => {
-//     const container = document.getElementById(containerId);
-//     if (container) {
-//       container.innerHTML = "";
-//     }
-//   }, [containerId]);
-
-//   const handleApprove = useCallback(async (data: any) => {
-//     if (!mountedRef.current) return;
-    
-//     try {
-//       setIsLoading(true);
-//       setError(null);
-//       console.log('🎯 PayPal subscription approved:', data.subscriptionID);
-
-//       // Create invoice if required data is provided
-//       let invoiceId = null;
-//       if (walletAddress && blockchainId && amount && dueDate) {
-//         try {
-//           console.log('📄 Creating invoice...');
-//           const invoiceRes = await axios.post(`${apiBaseUrl}/api/v1/invoices`, {
-//             walletAddress,
-//             blockchainId,
-//             amount,
-//             dueDate,
-//             tokenized: false,
-//             subscriptionId: data.subscriptionID,
-//           });
-//           invoiceId = invoiceRes.data?.data?.id;
-//           console.log('✅ Invoice created:', invoiceId);
-//         } catch (invoiceError: any) {
-//           console.warn('⚠️ Invoice creation failed:', invoiceError?.response?.data || invoiceError.message);
-//         }
-//       }
-
-//       // Create subscription in backend
-//       const subscriptionData = {
-//         plan_id: planId,
-//         userId,
-//         prismaPlanId,
-//         ...(invoiceId && { invoiceId })
-//       };
-
-//       console.log('📤 Creating backend subscription:', subscriptionData);
-
-//       const response = await axios.post(`${apiBaseUrl}/create-subscription`, subscriptionData);
-//       console.log('✅ Backend subscription created:', response.data);
-
-//       if (mountedRef.current) {
-//         setIsLoading(false);
-//         onApprove?.(data.subscriptionID);
-//       }
-//     } catch (err: any) {
-//       const errorMessage = err?.response?.data?.error || 
-//                           err?.response?.data?.details || 
-//                           err.message || 
-//                           "Subscription creation failed";
-      
-//       if (mountedRef.current) {
-//         console.error("❌ Subscription error:", err?.response?.data || err.message);
-//         setError(errorMessage);
-//         setIsLoading(false);
-//         onError?.(errorMessage);
-//       }
-//     }
-//   }, [planId, prismaPlanId, userId, walletAddress, blockchainId, amount, dueDate, onApprove, onError, apiBaseUrl]);
-
-//   const handleError = useCallback((err: any) => {
-//     if (!mountedRef.current) return;
-//     console.error("❌ PayPal button error:", err);
-//     const errorMessage = "PayPal payment error occurred";
-//     setError(errorMessage);
-//     setIsLoading(false);
-//     onError?.(errorMessage);
-//   }, [onError]);
-
-//   const handleCancel = useCallback(() => {
-//     if (!mountedRef.current) return;
-//     console.log("⚠️ PayPal subscription cancelled by user");
-//     setIsLoading(false);
-//     onCancel?.();
-//   }, [onCancel]);
-
-//   const renderButtons = useCallback(async () => {
-//     if (!mountedRef.current || !window.paypal?.Buttons || initializationRef.current) {
-//       return;
-//     }
-
-//     const container = document.getElementById(containerId);
-//     if (!container) {
-//       console.error('❌ Container not found:', containerId);
-//       return;
-//     }
-
-//     try {
-//       initializationRef.current = true;
-//       console.log('🔄 Rendering PayPal buttons for:', containerId);
-
-//       // Cleanup previous buttons
-//       if (buttonsRef.current) {
-//         try {
-//           buttonsRef.current.close();
-//         } catch (e) {
-//           console.warn("⚠️ Error closing previous PayPal button:", e);
-//         }
-//         buttonsRef.current = null;
-//       }
-
-//       container.innerHTML = "";
-//       await new Promise(resolve => setTimeout(resolve, 100));
-
-//       buttonsRef.current = window.paypal.Buttons({
-//         style: {
-//           shape: "pill",
-//           color: "gold",
-//           layout: "vertical",
-//           label: "subscribe",
-//           height: 40,
-//         },
-//         createSubscription: (_data: any, actions: any) => {
-//           console.log('🔄 Creating PayPal subscription with plan_id:', planId);
-//           return actions.subscription.create({ 
-//             plan_id: planId 
-//           });
-//         },
-//         onApprove: handleApprove,
-//         onError: handleError,
-//         onCancel: handleCancel,
-//       });
-
-//       await buttonsRef.current.render(`#${containerId}`);
-//       console.log('✅ PayPal buttons rendered for:', containerId);
-
-//       if (mountedRef.current) {
-//         setIsLoading(false);
-//         setError(null);
-//       }
-//     } catch (err: any) {
-//       if (mountedRef.current) {
-//         console.error("❌ Error rendering PayPal buttons:", err);
-//         setError(`Failed to render PayPal buttons: ${err.message}`);
-//         setIsLoading(false);
-//       }
-//     } finally {
-//       initializationRef.current = false;
-//     }
-//   }, [containerId, planId, handleApprove, handleError, handleCancel]);
-
-//   const initializePayPal = useCallback(async () => {
-//     if (!mountedRef.current || initializationRef.current) {
-//       return;
-//     }
-
-//     try {
-//       setIsLoading(true);
-//       setError(null);
-//       console.log('🚀 Initializing PayPal for:', containerId);
-      
-//       await loadPayPalScript();
-      
-//       if (!window.paypal) {
-//         throw new Error("PayPal SDK loaded but window.paypal not available");
-//       }
-      
-//       await renderButtons();
-//     } catch (err: any) {
-//       console.error("❌ PayPal initialization failed:", err);
-//       setError(`PayPal initialization failed: ${err.message}`);
-//       setIsLoading(false);
-//     }
-//   }, [loadPayPalScript, renderButtons, containerId]);
-
-//   const retryInitialization = useCallback(() => {
-//     if (initializationRef.current) return;
-
-//     console.log('🔄 Retrying PayPal initialization for:', containerId);
-//     setError(null);
-//     setIsLoading(true);
-//     initializationRef.current = false;
-
-//     // Cleanup
-//     if (buttonsRef.current) {
-//       try {
-//         buttonsRef.current.close();
-//       } catch (err) {
-//         console.warn("⚠️ Error closing PayPal button during retry:", err);
-//       }
-//       buttonsRef.current = null;
-//     }
-
-//     // Reset script loading state
-//     isScriptLoaded = false;
-//     scriptPromise = null;
-
-//     cleanupContainer();
-//     setTimeout(() => {
-//       if (mountedRef.current) {
-//         initializePayPal();
-//       }
-//     }, 1000);
-//   }, [cleanupContainer, initializePayPal, containerId]);
-
-//   useEffect(() => {
-//     mountedRef.current = true;
-//     initializationRef.current = false;
-    
-//     const timer = setTimeout(() => {
-//       if (mountedRef.current) {
-//         initializePayPal();
-//       }
-//     }, 100);
-
-//     return () => {
-//       clearTimeout(timer);
-//       mountedRef.current = false;
-//       initializationRef.current = false;
-      
-//       if (buttonsRef.current) {
-//         try {
-//           buttonsRef.current.close();
-//         } catch (err) {
-//           console.warn("⚠️ Error closing PayPal button on unmount:", err);
-//         }
-//         buttonsRef.current = null;
-//       }
-//       cleanupContainer();
-//     };
-//   }, [initializePayPal, cleanupContainer]);
-
-//   // Show error state
-//   if (error) {
-//     return (
-//       <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-//         <p className="text-red-700 text-sm font-medium">Payment Error</p>
-//         <p className="text-red-600 text-xs mt-1 break-words">{error}</p>
-//         <button
-//           onClick={retryInitialization}
-//           disabled={isLoading}
-//           className="mt-2 px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 transition-colors disabled:opacity-50"
-//         >
-//           {isLoading ? "Retrying..." : "Try Again"}
-//         </button>
-//       </div>
-//     );
-//   }
-
-//   return (
-//     <div className="paypal-subscription-container">
-//       {isLoading && (
-//         <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
-//           <div className="flex items-center justify-center">
-//             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2" />
-//             <span className="text-gray-600 text-sm">Loading PayPal...</span>
-//           </div>
-//         </div>
-//       )}
-//       <div
-//         ref={containerRef}
-//         id={containerId}
-//         style={{
-//           minHeight: isLoading ? "0" : "50px",
-//           opacity: isLoading ? 0.5 : 1,
-//           transition: "opacity 0.3s ease",
-//         }}
-//         className="paypal-buttons-container"
-//       />
-//     </div>
-//   );
-// };
-
-// export default PayPalSubscription;
 // src/components/PayPalSubscription.tsx
 import { useEffect, useRef, useState, useCallback } from "react";
 import axios from "axios";
@@ -389,6 +17,17 @@ interface PayPalSubscriptionProps {
   apiBaseUrl?: string;
 }
 
+// PayPal SDK types
+declare global {
+  interface Window {
+    paypal?: {
+      Buttons: (config: any) => {
+        render: (selector: string) => Promise<void>;
+      };
+    };
+  }
+}
+
 const PayPalSubscription = ({
   planId,
   prismaPlanId,
@@ -401,77 +40,231 @@ const PayPalSubscription = ({
   onApprove,
   onError,
   onCancel,
-  apiBaseUrl = "http://localhost:3000",
+  apiBaseUrl
 }: PayPalSubscriptionProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sdkLoaded, setSdkLoaded] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonsRendered = useRef(false);
 
-  // ✅ TEMPORARY: Test mode - skip PayPal, directly call backend
-  const handleTestSubscription = useCallback(async () => {
+  // Safe environment variable access
+  const getApiBaseUrl = useCallback(() => {
+    if (apiBaseUrl) return apiBaseUrl;
+    
+    // For Vite (development)
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      return import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+    }
+    
+    // For Create React App
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env.REACT_APP_API_BASE_URL || 'http://localhost:3001';
+    }
+    
+    // Fallback
+    return 'http://localhost:3001';
+  }, [apiBaseUrl]);
+
+  const getPayPalClientId = useCallback(() => {
+    // For Vite (development)
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      return import.meta.env.VITE_PAYPAL_CLIENT_ID;
+    }
+    
+    // For Create React App
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env.REACT_APP_PAYPAL_CLIENT_ID;
+    }
+    
+    // For Next.js
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID;
+    }
+    
+    return null;
+  }, []);
+
+  const PAYPAL_CLIENT_ID = getPayPalClientId();
+  const API_BASE_URL = getApiBaseUrl();
+
+  // Check if PayPal Client ID is available
+  useEffect(() => {
+    if (!PAYPAL_CLIENT_ID) {
+      setError('PayPal Client ID is not configured. Please check your environment variables.');
+    }
+  }, [PAYPAL_CLIENT_ID]);
+
+  // Load PayPal SDK
+  useEffect(() => {
+    if (!PAYPAL_CLIENT_ID || error) {
+      return;
+    }
+
+    const loadPayPalSDK = () => {
+      if (window.paypal) {
+        setSdkLoaded(true);
+        return;
+      }
+
+      const existingScript = document.querySelector(`script[src*="paypal.com/sdk/js"]`);
+      if (existingScript) {
+        existingScript.addEventListener('load', () => setSdkLoaded(true));
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = `https://www.paypal.com/sdk/js?client-id=${PAYPAL_CLIENT_ID}&vault=true&intent=subscription`;
+      script.setAttribute('data-sdk-integration-source', 'button-factory');
+      
+      script.onload = () => {
+        setSdkLoaded(true);
+      };
+      
+      script.onerror = () => {
+        setError('Failed to load PayPal SDK');
+      };
+
+      document.head.appendChild(script);
+    };
+
+    loadPayPalSDK();
+  }, [PAYPAL_CLIENT_ID, error]);
+
+  // Handle subscription creation via backend
+  const handleSubscriptionCreation = useCallback(async (subscriptionId: string) => {
     try {
       setIsLoading(true);
-      setError(null);
 
-      console.log('🧪 TEST MODE: Creating subscription without PayPal');
-      console.log('📤 Test subscription data:', {
+      const response = await axios.post(`${API_BASE_URL}/create-subscription`, {
+        plan_id: planId,
         userId,
         prismaPlanId,
-        planId,
-        amount
+        subscriptionId
       });
 
-      // Call the test endpoint that bypasses PayPal
-      const response = await axios.post(`${apiBaseUrl}/test-plan-switch`, {
-        userId,
-        prismaPlanId
-      });
-
-      console.log('✅ Test subscription created:', response.data);
-
-      const testSubscriptionId = `test-sub-${Date.now()}`;
-      
       setIsLoading(false);
-      onApprove?.(testSubscriptionId);
+      onApprove?.(subscriptionId);
 
     } catch (err: any) {
-      console.error('❌ Test subscription error:', err);
-      const errorMessage = err?.response?.data?.error || err.message || 'Test subscription failed';
+      const errorMessage = err?.response?.data?.error || err.message || 'Subscription processing failed';
       setError(errorMessage);
       setIsLoading(false);
       onError?.(errorMessage);
     }
-  }, [userId, prismaPlanId, planId, amount, onApprove, onError, apiBaseUrl]);
+  }, [userId, prismaPlanId, planId, onApprove, onError, API_BASE_URL]);
+
+  // Render PayPal buttons
+  useEffect(() => {
+    if (!sdkLoaded || !window.paypal || buttonsRendered.current || !containerRef.current || error) {
+      return;
+    }
+
+    try {
+      window.paypal.Buttons({
+        style: {
+          shape: 'pill',
+          color: 'gold',
+          layout: 'vertical',
+          label: 'subscribe',
+          height: 40,
+        },
+        createSubscription: function(data: any, actions: any) {
+          return actions.subscription.create({
+            plan_id: planId
+          });
+        },
+        onApprove: function(data: any, actions: any) {
+          handleSubscriptionCreation(data.subscriptionID);
+        },
+        onError: function(err: any) {
+          const errorMessage = 'PayPal subscription failed. Please try again.';
+          setError(errorMessage);
+          onError?.(errorMessage);
+        },
+        onCancel: function(data: any) {
+          onCancel?.();
+        }
+      }).render(`#${containerId}`);
+
+      buttonsRendered.current = true;
+
+    } catch (renderError) {
+      setError('Failed to render PayPal buttons');
+    }
+  }, [sdkLoaded, planId, containerId, handleSubscriptionCreation, onError, onCancel, error]);
 
   const handleCancel = useCallback(() => {
-    console.log('⚠️ Test subscription cancelled');
     onCancel?.();
   }, [onCancel]);
 
   const retrySubscription = useCallback(() => {
     setError(null);
-    handleTestSubscription();
-  }, [handleTestSubscription]);
+    buttonsRendered.current = false;
+    if (containerRef.current) {
+      containerRef.current.innerHTML = '';
+    }
+  }, []);
 
   // Show error state
   if (error) {
     return (
-      <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-        <p className="text-red-700 text-sm font-medium">Subscription Error</p>
-        <p className="text-red-600 text-xs mt-1 break-words">{error}</p>
-        <div className="flex gap-2 mt-2">
-          <button
-            onClick={retrySubscription}
-            disabled={isLoading}
-            className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 transition-colors disabled:opacity-50"
-          >
-            {isLoading ? "Retrying..." : "Try Again"}
-          </button>
-          <button
-            onClick={handleCancel}
-            className="px-3 py-1 bg-gray-600 text-white rounded text-sm hover:bg-gray-700 transition-colors"
-          >
-            Cancel
-          </button>
+      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+        <div className="flex items-start">
+          <div className="flex-shrink-0">
+            <div className="w-5 h-5 bg-red-100 rounded-full flex items-center justify-center">
+              <span className="text-red-600 text-xs font-bold">!</span>
+            </div>
+          </div>
+          <div className="ml-3 flex-1">
+            <p className="text-red-800 text-sm font-medium">Subscription Error</p>
+            <p className="text-red-700 text-xs mt-1 break-words">{error}</p>
+            <div className="flex gap-2 mt-3">
+              <button
+                onClick={retrySubscription}
+                disabled={isLoading}
+                className="px-3 py-1.5 bg-red-600 text-white rounded text-xs font-medium hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoading ? "Retrying..." : "Try Again"}
+              </button>
+              <button
+                onClick={handleCancel}
+                className="px-3 py-1.5 bg-gray-500 text-white rounded text-xs font-medium hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading state during backend processing
+  if (isLoading) {
+    return (
+      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-center justify-center">
+          <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-200 border-t-blue-600 mr-3" />
+          <div className="text-center">
+            <p className="text-blue-800 text-sm font-medium">Processing Subscription</p>
+            <p className="text-blue-600 text-xs mt-1">Please wait while we set up your plan...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading state while SDK loads
+  if (!sdkLoaded) {
+    return (
+      <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+        <div className="flex items-center justify-center">
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-gray-600 mr-3" />
+          <div className="text-center">
+            <p className="text-gray-700 text-sm font-medium">Loading PayPal</p>
+            <p className="text-gray-600 text-xs mt-1">Initializing secure payment...</p>
+          </div>
         </div>
       </div>
     );
@@ -479,22 +272,11 @@ const PayPalSubscription = ({
 
   return (
     <div className="paypal-subscription-container">
-      {isLoading ? (
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-center justify-center">
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2" />
-            <span className="text-blue-600 text-sm">Processing subscription...</span>
-          </div>
-        </div>
-      ) : (
-        <button
-          onClick={handleTestSubscription}
-          disabled={isLoading}
-          className="w-full py-3 px-4 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
-        >
-          🧪 Test Subscribe (${amount}/month)
-        </button>
-      )}
+      <div 
+        ref={containerRef}
+        id={containerId}
+        className="paypal-button-container min-h-[50px] flex items-center justify-center"
+      />
     </div>
   );
 };

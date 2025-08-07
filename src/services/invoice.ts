@@ -1,17 +1,17 @@
-// src/services/invoice.ts - CORRECTED: Fixed all TypeScript errors
+// src/services/invoice.ts - PRODUCTION VERSION: Fixed all TypeScript errors
 import { PrismaClient } from '@prisma/client';
 import { create } from 'ipfs-http-client';
 
 const prisma = new PrismaClient();
 const ipfs = create({ url: process.env.IPFS_URL || 'http://localhost:5001' });
 
-// ✅ CORRECTED: Updated type to match actual schema
-type InvoiceWithUser = {
+// ✅ Updated type to match actual schema
+export type InvoiceWithUser = {
   id: string;
   userId: string;
   blockchainId: string;
   walletAddress: string;
-  crossChainIdentityId?: string | null; // ✅ This will be added after schema migration
+  crossChainIdentityId?: string | null;
   amount: number;
   ethAmount: number | null;
   weiAmount: string | null;
@@ -79,15 +79,15 @@ export class InvoiceService {
         const ipfsResult = await ipfs.add(JSON.stringify(ipfsData));
         ipfsHash = ipfsResult.path;
       } catch (ipfsError: unknown) {
-        console.warn('⚠️ IPFS upload failed, proceeding without IPFS hash:', ipfsError);
+        // IPFS upload failed, continue without IPFS hash
       }
-
+      
       const maxRetries = 3;
       let attempt = 0;
 
       while (attempt < maxRetries) {
         try {
-          // ✅ CORRECTED: Create invoice data without crossChainIdentityId for now
+          // Create invoice data
           const invoiceData: any = {
             userId: data.userId,
             blockchainId: data.blockchainId,
@@ -105,14 +105,12 @@ export class InvoiceService {
             escrowAddress: data.escrowAddress ?? null,
             subscriptionId: data.subscriptionId ?? null,
             paymentHash: data.blockchainTxHash,
-            status: 'UNPAID', // ✅ Use correct enum value
+            status: 'UNPAID',
           };
 
-          // ✅ TEMPORARY: Only add crossChainIdentityId if your schema supports it
-          // Uncomment this line after running the migration:
-          // if (data.crossChainIdentityId) {
-          //   invoiceData.crossChainIdentityId = data.crossChainIdentityId;
-          // }
+          if (data.crossChainIdentityId) {
+            invoiceData.crossChainIdentityId = data.crossChainIdentityId;
+          }
 
           const invoice = await prisma.invoice.create({
             data: invoiceData,
@@ -124,14 +122,13 @@ export class InvoiceService {
                   blockchainId: true,
                 },
               },
-              // ✅ CORRECTED: Removed crossChainIdentity include (add back after migration)
-              // crossChainIdentity: {
-              //   select: {
-              //     id: true,
-              //     walletAddress: true,
-              //     blockchainId: true,
-              //   },
-              // },
+              crossChainIdentity: {
+                select: {
+                  id: true,
+                  walletAddress: true,
+                  blockchainId: true,
+                },
+              },
             },
           });
 
@@ -140,7 +137,6 @@ export class InvoiceService {
         } catch (dbError: unknown) {
           attempt++;
           if (attempt >= maxRetries) {
-            console.error(`❌ Failed to create invoice after ${maxRetries} attempts:`, dbError);
             throw dbError;
           }
           
@@ -151,7 +147,6 @@ export class InvoiceService {
       throw new Error('Failed to create invoice after maximum retries');
 
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.create:', error);
       throw error;
     }
   }
@@ -183,7 +178,6 @@ export class InvoiceService {
 
       return invoice as InvoiceWithUser | null;
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.getById:', error);
       throw error;
     }
   }
@@ -216,18 +210,36 @@ export class InvoiceService {
 
       return invoices as InvoiceWithUser[];
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.getByUserId:', error);
       throw error;
     }
   }
 
-  static async getByWalletAddress(walletAddress: string): Promise<InvoiceWithUser[]> {
+  static async getByWalletAddress(walletAddress: string, blockchainId: string): Promise<InvoiceWithUser[]> {
     try {
       const invoices = await prisma.invoice.findMany({
         where: {
-          walletAddress: walletAddress,
+          OR: [
+            // Invoices created by this wallet (user's primary wallet)
+            {
+              user: {
+                walletAddress: walletAddress,
+                blockchainId: blockchainId
+              }
+            },
+            // Invoices sent TO this wallet (recipient)
+            {
+              walletAddress: walletAddress,
+              blockchainId: blockchainId
+            },
+            // Invoices from cross-chain identity
+            {
+              crossChainIdentity: {
+                walletAddress: walletAddress,
+                blockchainId: blockchainId
+              }
+            }
+          ]
         },
-        orderBy: { createdAt: 'desc' },
         include: {
           user: {
             select: {
@@ -246,17 +258,23 @@ export class InvoiceService {
               createdAt: true,
             },
           },
+          crossChainIdentity: {
+            select: {
+              id: true,
+              walletAddress: true,
+              blockchainId: true,
+            }
+          }
         },
+        orderBy: { createdAt: 'desc' }
       });
 
       return invoices as InvoiceWithUser[];
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.getByWalletAddress:', error);
       throw error;
     }
   }
 
-  // ✅ CORRECTED: Use correct status enum values
   static async updateStatus(
     id: string, 
     status: 'UNPAID' | 'PAID' | 'CANCELED', 
@@ -268,7 +286,7 @@ export class InvoiceService {
         updatedAt: new Date(),
       };
 
-      // ✅ Set paidAt and paymentHash when marking as paid
+      // Set paidAt and paymentHash when marking as paid
       if (status === 'PAID') {
         updateData.paidAt = new Date();
         if (paymentHash) {
@@ -302,7 +320,6 @@ export class InvoiceService {
 
       return updatedInvoice as InvoiceWithUser;
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.updateStatus:', error);
       throw error;
     }
   }
@@ -345,7 +362,6 @@ export class InvoiceService {
         },
       };
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.getWithConversionDetails:', error);
       throw error;
     }
   }
@@ -390,12 +406,10 @@ export class InvoiceService {
 
       return updatedInvoice as InvoiceWithUser;
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.updateWithNewConversion:', error);
       throw error;
     }
   }
 
-  // ✅ CORRECTED: Use correct status enum values
   static async getByStatus(status: 'UNPAID' | 'PAID' | 'CANCELED'): Promise<InvoiceWithUser[]> {
     try {
       const invoices = await prisma.invoice.findMany({
@@ -424,49 +438,46 @@ export class InvoiceService {
 
       return invoices as InvoiceWithUser[];
     } catch (error: unknown) {
-      console.error('❌ Error in InvoiceService.getByStatus:', error);
       throw error;
     }
   }
 
-  // ✅ NEW: Method to get invoices by CrossChainIdentity (add after migration)
-  // static async getByCrossChainIdentityId(crossChainIdentityId: string): Promise<InvoiceWithUser[]> {
-  //   try {
-  //     const invoices = await prisma.invoice.findMany({
-  //       where: { crossChainIdentityId },
-  //       orderBy: { createdAt: 'desc' },
-  //       include: {
-  //         user: {
-  //           select: {
-  //             id: true,
-  //             walletAddress: true,
-  //             blockchainId: true,
-  //           },
-  //         },
-  //         crossChainIdentity: {
-  //           select: {
-  //             id: true,
-  //             walletAddress: true,
-  //             blockchainId: true,
-  //           },
-  //         },
-  //         transactions: {
-  //           select: {
-  //             id: true,
-  //             amount: true,
-  //             type: true,
-  //             status: true,
-  //             hash: true,
-  //             createdAt: true,
-  //           },
-  //         },
-  //       },
-  //     });
+  static async getByCrossChainIdentityId(crossChainIdentityId: string): Promise<InvoiceWithUser[]> {
+    try {
+      const invoices = await prisma.invoice.findMany({
+        where: { crossChainIdentityId },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: {
+              id: true,
+              walletAddress: true,
+              blockchainId: true,
+            },
+          },
+          crossChainIdentity: {
+            select: {
+              id: true,
+              walletAddress: true,
+              blockchainId: true,
+            },
+          },
+          transactions: {
+            select: {
+              id: true,
+              amount: true,
+              type: true,
+              status: true,
+              hash: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
 
-  //     return invoices as InvoiceWithUser[];
-  //   } catch (error: unknown) {
-  //     console.error('❌ Error in InvoiceService.getByCrossChainIdentityId:', error);
-  //     throw error;
-  //   }
-  // }
+      return invoices as InvoiceWithUser[];
+    } catch (error: unknown) {
+      throw error;
+    }
+  }
 }

@@ -43,7 +43,6 @@ const CreditScoreViewer = () => {
     // ✅ Check cache first
     const now = Date.now();
     if (now - lastFetchTime < CACHE_DURATION && creditScoreData !== null) {
-      console.log('Using cached credit score data');
       setLoading(false);
       return;
     }
@@ -87,7 +86,7 @@ const CreditScoreViewer = () => {
         try {
           errorData = await creditResponse.json();
         } catch (parseError) {
-          console.error('Failed to parse error response:', parseError);
+
           errorData = { error: `HTTP ${creditResponse.status}: ${creditResponse.statusText}` };
         }
         
@@ -128,7 +127,6 @@ const CreditScoreViewer = () => {
 
       // Only read JSON if response is ok
       const creditData = await creditResponse.json();
-      console.log('Credit data:', creditData);
 
       if (creditData.success && creditData.creditScore !== undefined) {
         setCreditScoreData({
@@ -139,9 +137,7 @@ const CreditScoreViewer = () => {
           walletAddress: creditData.walletAddress,
           blockchainId: creditData.blockchainId
         });
-        console.log(`✅ Credit score loaded: ${creditData.creditScore} (source: ${creditData.source})`);
       } else {
-        console.error("Unexpected response format:", creditData);
         setCreditScoreData(null);
         setError("Invalid credit score data received");
       }
@@ -153,7 +149,6 @@ const CreditScoreViewer = () => {
 
           if (usageResponse.ok) {
             const usageData = await usageResponse.json();
-            console.log('Usage data response:', usageData);
             
             if (usageData.success && usageData.data) {
               setQueryUsage({
@@ -171,10 +166,10 @@ const CreditScoreViewer = () => {
             }
           } else {
             const errorData = await usageResponse.json();
-            console.warn('Failed to fetch usage data:', usageResponse.status, errorData);
+
           }
         } catch (usageError) {
-          console.warn('Failed to fetch usage data:', usageError);
+
         }
       }
 
@@ -182,7 +177,7 @@ const CreditScoreViewer = () => {
       setLastFetchTime(now);
 
     } catch (err: any) {
-      console.error("Failed to load credit score", err);
+
       setCreditScoreData(null);
       setError(err.message || "Failed to load credit score");
       setQueryUsage(null);
@@ -194,7 +189,6 @@ const CreditScoreViewer = () => {
 
   // ✅ Add manual refresh function that bypasses cache
   const refreshScore = async () => {
-    console.log('Manual refresh requested - bypassing cache');
     setLastFetchTime(0); // Reset cache
     await fetchScore();
   };
@@ -318,7 +312,7 @@ const CreditScoreViewer = () => {
                 Register your wallet to start building your Web3 credit score.
               </p>
               <a
-                href="/users"
+                href="/user-registry"
                 className="inline-block mt-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
               >
                 Register Wallet
